@@ -1,0 +1,7 @@
+{
+  "name": "경험스택 11/24, 3:00",
+  "description": "An AI-powered coach to help you organize, structure, and articulate your personal and professional experiences using guided conversational flows.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
