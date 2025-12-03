@@ -10,9 +10,17 @@ export type TabType = 'chat' | 'list' | 'story' | 'report';
 // Re-exporting User type from Firebase for convenience
 export type { User };
 
+export interface AlarmSettings {
+    isEnabled: boolean;
+    days: number[]; // 0 = Sunday, 1 = Monday, ... 6 = Saturday
+    time: string;   // "HH:MM" 24-hour format
+    message: string;
+}
+
 export interface UserProfile {
     uid: string;
     name: string;
+    nickname?: string; // 친근한 호칭/별명
     gender?: 'male' | 'female';
     dateOfBirth?: string;
     school?: string;
@@ -21,6 +29,15 @@ export interface UserProfile {
     interestedJob?: string;
     // 온보딩 완료 여부 플래그
     isOnboardingFinished?: boolean;
+    
+    // 친밀도 시스템 (Friendship Level)
+    friendshipScore?: number;
+    streakDays?: number;
+    lastInteractionDate?: string; // For streak calculation (YYYY-MM-DD)
+    lastChatDate?: string; // To prevent spamming daily chat points (YYYY-MM-DD)
+
+    // 알람 설정
+    alarmSettings?: AlarmSettings;
 }
 
 export interface ChatMessage {
@@ -37,6 +54,7 @@ export interface ChatSession {
     lastMessage: string;
     createdAt: string;
     updatedAt?: string;
+    deletedAt?: string | null; // Soft delete field
 }
 
 export interface BasicExperienceData {
@@ -72,11 +90,12 @@ export interface StoryData {
     job: string;
 }
 
+// [STEP 4] NLP Unit Type for evidence tracking
 export interface NLPUnit {
     text: string;
     starType?: "S" | "T" | "A" | "R";
-    skills: string[];
-    jobs: string[];
+    skills: string[]; // Skill IDs
+    jobs: string[];   // Job IDs
 }
 
 export interface Experience {
@@ -106,12 +125,13 @@ export interface Experience {
     result_qualitative: string;
     learning: string;
     createdAt: string;
+    deletedAt?: string | null; // Soft delete field
     tags?: string[];
     
-    // [STEP 4] 자동 태깅 분석 데이터
-    skills?: string[];
-    jobs?: string[];
-    nlpUnits?: NLPUnit[];
+    // [STEP 4] 자동 태깅 분석 데이터 (NCS 기반)
+    skills?: string[]; // e.g. ["COM001", "MKT003"]
+    jobs?: string[];   // e.g. ["JOB002"]
+    nlpUnits?: NLPUnit[]; // 문장 단위 분석 데이터
 }
 
 export interface ExperienceSummary {
@@ -138,7 +158,60 @@ export interface JobRecommendation {
     matchingSkills: string[];
 }
 
+// --- New Types for Advanced Report ---
+
+export interface KeywordMetric {
+    text: string;
+    value: number; // 1-100 score for visualization size
+    category: 'interest' | 'job_related' | 'general';
+}
+
+export interface RadarMetric {
+    axis: string; // Competency Name
+    myScore: number;
+    avgScore: number; // Industry Average
+    topScore: number; // Top Performer
+}
+
+export interface GapAction {
+    skillName: string;
+    gapDescription: string;
+    methodology: string; // "How to think"
+    recommendedActivity: string; // Specific activity category/example
+}
+
+export interface GrowthPoint {
+    year: string;
+    score: number; // 0-100 growth index
+    isProjection: boolean; // True if future prediction
+    milestone?: string; // Optional label for the point
+    description?: string; // Evidence or reason for the score
+    relatedExperienceId?: string; // Optional ID to link back to the source experience
+}
+
+export interface SWOTData {
+    strengths: string[];
+    weaknesses: string[];
+    opportunities: string[];
+    threats: string[];
+    industryTrends: string; // Market situation text
+}
+
 export interface ReportData {
+    // Advanced Analysis Fields
+    keywordAnalysis?: {
+        wordCloud: KeywordMetric[];
+        jobKeywords: KeywordMetric[];
+    };
+    competencyRadar?: {
+        targetJob: string;
+        data: RadarMetric[];
+    };
+    gapAnalysis?: GapAction[];
+    growthCurve?: GrowthPoint[];
+    swotAnalysis?: SWOTData;
+
+    // Original Fields
     strengths: ReportSection;
     growthOpportunities: ReportSection;
     jobRecommendations: JobRecommendation[];
@@ -171,4 +244,28 @@ export interface JobFitAnalysis {
         toDo: string[];
     }[];
     rank: number;
+}
+
+// --- Diary Entry Type ---
+export interface DiaryEntry {
+    id: string;
+    date: string; // YYYY-MM-DD
+    title: string;
+    content: string;
+    mood: string; // Emoji
+    tags: string[];
+    createdAt: string;
+}
+
+// --- Calendar Event Type ---
+export interface CalendarEvent {
+    id: string;
+    date: string; // "YYYY-MM-DD"
+    time?: string; // "HH:MM" (Optional)
+    title: string;
+    type: 'PAST_RECORD' | 'FUTURE_PLAN'; // 과거 이력 vs 미래 계획
+    category: 'MEETING' | 'TRAVEL' | 'STUDY' | 'DEADLINE' | 'ETC';
+    description?: string;
+    createdAt?: string;
+    isHandled?: boolean; // Flag to indicate if the AI has already asked about this event
 }

@@ -1,12 +1,31 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Experience Coach AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* Global App Reset */
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            /* CRITICAL FIX for Mobile Safari/Chrome rubber-banding & layout shift */
+            overflow: hidden; 
+            background-color: #f8fafc; /* slate-50 */
+            touch-action: none; /* Disable default touch actions to prevent scroll chaining */
+        }
+        
+        #root {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
         /* For custom scrollbar aesthetics */
         ::-webkit-scrollbar {
             width: 8px;
@@ -29,6 +48,87 @@
         .highlight-animation {
             animation: highlight 1.5s ease-out;
         }
+
+        /* Print Styles for Report PDF */
+        @media print {
+            @page {
+                size: A4 portrait; /* Force A4 Portrait */
+                margin: 10mm;      /* Standard print margins */
+            }
+            
+            html, body {
+                height: auto !important;
+                width: auto !important;
+                overflow: visible !important;
+                background: white !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+
+            /* 1. Hide everything by default */
+            body * {
+                visibility: hidden;
+            }
+
+            /* 2. Show the report and its descendants */
+            #printable-report-area, #printable-report-area * {
+                visibility: visible;
+            }
+
+            /* 3. Position the report area - Reset absolute/fixed positioning to flow naturally */
+            #printable-report-area {
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                z-index: 9999;
+                background: white;
+            }
+
+            /* 4. Reset ancestors to prevent clipping */
+            #root, .app-container, main, .overflow-hidden, .overflow-y-auto, .h-full, .h-screen, .fixed, .absolute {
+                overflow: visible !important;
+                height: auto !important;
+                width: auto !important;
+                position: static !important;
+                transform: none !important;
+            }
+
+            /* 6. Hide UI elements explicitly */
+            .no-print, button, nav, header, footer, .fixed-bottom, input, textarea {
+                display: none !important;
+            }
+
+            /* 7. Hide scrollbars */
+            ::-webkit-scrollbar {
+                display: none;
+            }
+            
+            /* Page break handling */
+            .page-break-inside-avoid {
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }
+            .break-before-page {
+                break-before: page;
+                page-break-before: always;
+            }
+            h1, h2, h3, h4, h5, h6 {
+                break-after: avoid;
+                page-break-after: avoid;
+            }
+            img, svg {
+                break-inside: avoid;
+            }
+            
+            /* Typography optimizations for print */
+            body {
+                font-size: 12pt;
+                line-height: 1.5;
+            }
+        }
     </style>
 <script type="importmap">
 {
@@ -40,7 +140,8 @@
     "firebase/app": "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js",
     "firebase/auth": "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js",
     "firebase/firestore": "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js",
-    "firebase/": "https://aistudiocdn.com/firebase@^12.5.0/"
+    "firebase/": "https://aistudiocdn.com/firebase@^12.5.0/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.0"
   }
 }
 </script>

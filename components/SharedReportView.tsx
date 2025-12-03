@@ -106,7 +106,7 @@ const SharedReportView: React.FC<SharedReportViewProps> = ({ reportId }) => {
 
     return (
         <div className="bg-gray-50 min-h-screen p-4 sm:p-8">
-            <div className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-lg shadow-lg">
+            <div id="printable-report-area" className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-lg shadow-lg">
                 <div className="text-center mb-8 border-b pb-6">
                     <h1 className="text-3xl font-bold text-gray-800">개인 리포트</h1>
                     <p className="text-gray-500 mt-2">AI가 생성한 커리어 분석 리포트입니다.</p>
@@ -174,7 +174,7 @@ const SharedReportView: React.FC<SharedReportViewProps> = ({ reportId }) => {
                                 <p className="text-sm text-gray-500 italic">아직 코멘트가 없습니다.</p>
                             )}
                         </div>
-                        <form onSubmit={handleAddComment} className="p-4 bg-gray-100 rounded-lg">
+                        <form onSubmit={handleAddComment} className="p-4 bg-gray-100 rounded-lg no-print">
                             <h4 className="font-bold text-gray-800 mb-2">코멘트 추가하기</h4>
                             <div className="space-y-3">
                                 <input

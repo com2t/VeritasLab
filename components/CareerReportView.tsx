@@ -18,6 +18,8 @@ interface CareerReportViewProps {
 // --- UPDATED SYSTEM INSTRUCTION FOR ADVANCED REPORT ---
 const REPORT_SYSTEM_INSTRUCTION = `You are an expert career coach AI. Your task is to analyze a user's collection of experiences and generate a comprehensive, highly visual, and actionable career report JSON.
 
+**CRITICAL LANGUAGE RULE**: ALL TEXT CONTENT (summaries, descriptions, reasons, methodologies, etc.) MUST BE IN **KOREAN (한국어)**.
+
 The user's experiences are provided as a JSON array.
 **Target Job Inference:** If the user has an 'interestedJob' in their profile, use it. If not, infer the most likely target job based on their experience patterns (e.g., if they have coding projects -> Software Engineer).
 
@@ -40,15 +42,15 @@ Structure your response to match this exact JSON schema:
   "competencyRadar": {
     "targetJob": "Inferred Target Job Title (Korean)",
     "data": [
-      { "axis": "Competency Name (Korean)", "myScore": 0, "avgScore": 50, "topScore": 90 }
+      { "axis": "Competency Name (Korean)", "myScore": 0, "avgScore": 5, "topScore": 10 }
     ]
   },
   "gapAnalysis": [
     {
-      "skillName": "Missing Skill",
-      "gapDescription": "Why this gap matters",
-      "methodology": "Mindset or approach to learn this",
-      "recommendedActivity": "Specific activity type (e.g. Project)"
+      "skillName": "Missing Skill (Korean)",
+      "gapDescription": "Why this gap matters (Korean)",
+      "methodology": "Mindset or approach to learn this (Korean)",
+      "recommendedActivity": "Specific activity type (e.g. Project) (Korean)"
     }
   ],
   "growthCurve": [
@@ -60,7 +62,7 @@ Structure your response to match this exact JSON schema:
     "weaknesses": ["W1", "W2"],
     "opportunities": ["O1", "O2"],
     "threats": ["T1", "T2"],
-    "industryTrends": "Detailed industry trend analysis..."
+    "industryTrends": "Detailed industry trend analysis (Korean)..."
   },
   "strengths": { "title": "핵심 강점", "content": "...", "examples": [], "skills": [] },
   "growthOpportunities": { "title": "성장 기회", "content": "...", "examples": [], "skills": [] },
@@ -77,14 +79,14 @@ Structure your response to match this exact JSON schema:
     *   **wordCloud:** Extract 10-15 keywords representing the user's *personal interests* and *themes* found in their texts. 'value' (10-100) based on frequency/intensity.
     *   **jobKeywords:** Extract 5-10 keywords specifically related to *hard/soft skills* relevant to the target job.
 
-2.  **competencyRadar:**
+2.  **competencyRadar (Activity Count Based):**
     *   Identify 5-6 key competencies required for the *Target Job*.
-    *   **myScore:** Evaluate user based on their STAR stories (0-100). **Set to 0 if no evidence exists.**
-    *   **avgScore:** Estimate the industry AVERAGE for junior/entry-level in this role.
-    *   **topScore:** Estimate what a TOP PERFORMER (High Potential) looks like.
+    *   **myScore (Activity Count):** **STRICTLY COUNT** the number of user experiences (from the input list) that demonstrate this specific competency. e.g., If they have 3 stories about 'Communication', score is 3. **DO NOT use 0-100 scale. Use Raw Counts.**
+    *   **avgScore (Avg Activity Count):** Estimate the **Average Number of Experiences** a typical candidate for this job would have (e.g., usually 2-4).
+    *   **topScore (Top Activity Count):** Estimate the **Number of Experiences** a TOP PERFORMER would have (e.g., usually 5-8+).
 
 3.  **gapAnalysis:**
-    *   Identify 2-3 areas where 'myScore' < 'topScore'.
+    *   Identify 2-3 areas where 'myScore' < 'topScore' (Activity Count Gap).
     *   **methodology:** Explain the *mindset* or *approach* needed to bridge this gap.
     *   **recommendedActivity:** Suggest a specific *category of experience* or project type to undertake.
 
@@ -116,11 +118,6 @@ const SkillTag: React.FC<{ children: React.ReactNode }> = ({ children }) => (
         {children}
     </span>
 );
-
-// ... (Keep existing Sub-components: ExperienceMatrixTable, StorySummaryTable, WordCloudSection, ReportRadarChart, GrowthLineChart, SWOTGrid, GapAnalysisCard)
-// Assuming they are unchanged, I will omit their full code here for brevity if they are internal, 
-// but since this is a file replacement, I must include EVERYTHING.
-// To save space in this response, I'll copy them back in.
 
 // --- Sub-component: Experience Matrix Table ---
 const ExperienceMatrixTable: React.FC<{ experiences: Experience[] }> = ({ experiences }) => {
@@ -278,7 +275,15 @@ const WordCloudSection: React.FC<{ keywords: KeywordMetric[] }> = ({ keywords })
 );
 
 const ReportRadarChart: React.FC<{ data: RadarMetric[], targetJob: string }> = ({ data, targetJob }) => {
-    const size = 300; const center = size / 2; const radius = size / 2 - 40; const maxScore = 100;
+    const size = 300; 
+    const center = size / 2; 
+    const radius = size / 2 - 40; 
+    
+    // Calculate dynamic max score based on activity counts
+    const maxValue = Math.max(...data.map(d => Math.max(d.myScore, d.avgScore, d.topScore)));
+    // Ensure a minimum scale (e.g., 5) so small counts don't look huge, and handle 0 case.
+    const maxScore = maxValue > 0 ? Math.ceil(maxValue * 1.1) : 5; // Add 10% buffer
+
     const calculatePoints = (scores: number[]) => {
         const total = data.length;
         return data.map((_, i) => {
@@ -289,21 +294,34 @@ const ReportRadarChart: React.FC<{ data: RadarMetric[], targetJob: string }> = (
             return `${x},${y}`;
         }).join(' ');
     };
+    
     const myPoints = calculatePoints(data.map(d => d.myScore));
     const avgPoints = calculatePoints(data.map(d => d.avgScore));
     const topPoints = calculatePoints(data.map(d => d.topScore));
-    const bgPoints = calculatePoints(new Array(data.length).fill(100));
+    const bgPoints = calculatePoints(new Array(data.length).fill(maxScore));
 
     return (
         <div className="flex flex-col items-center">
-            <h4 className="text-lg font-bold text-slate-800 mb-2">{targetJob} 역량 비교</h4>
+            <h4 className="text-lg font-bold text-slate-800 mb-2">{targetJob} 역량 비교 (활동 수 기준)</h4>
             <div className="relative">
                 <svg width={size} height={size}>
+                     {/* Background Polygon (Max) */}
                      <polygon points={bgPoints} fill="#f8fafc" stroke="#e2e8f0" strokeWidth="1" />
-                     {[0.25, 0.5, 0.75].map(scale => <polygon key={scale} points={calculatePoints(new Array(data.length).fill(100 * scale))} fill="none" stroke="#e2e8f0" strokeDasharray="4 4" />)}
+                     
+                     {/* Grid Lines (25%, 50%, 75% of dynamic max) */}
+                     {[0.25, 0.5, 0.75].map(scale => (
+                        <polygon key={scale} points={calculatePoints(new Array(data.length).fill(maxScore * scale))} fill="none" stroke="#e2e8f0" strokeDasharray="4 4" />
+                     ))}
+                    
+                    {/* Top Performer (Count) */}
                     <polygon points={topPoints} fill="rgba(251, 191, 36, 0.1)" stroke="#fbbf24" strokeWidth="2" strokeDasharray="5 5"/>
+                    
+                    {/* Avg (Count) */}
                     <polygon points={avgPoints} fill="rgba(100, 116, 139, 0.2)" stroke="#64748b" strokeWidth="2" strokeDasharray="2 2" />
+                    
+                    {/* My Score (Count) */}
                     <polygon points={myPoints} fill="rgba(79, 70, 229, 0.4)" stroke="#4f46e5" strokeWidth="2" />
+                    
                      {data.map((d, i) => {
                         const angle = (Math.PI * 2 * i) / data.length - Math.PI / 2;
                         const x = center + (radius + 20) * Math.cos(angle);
@@ -313,7 +331,7 @@ const ReportRadarChart: React.FC<{ data: RadarMetric[], targetJob: string }> = (
                 </svg>
             </div>
             <div className="flex flex-wrap justify-center gap-4 mt-4 text-xs font-semibold">
-                <div className="flex items-center gap-1"><div className="w-3 h-3 bg-indigo-500 opacity-60 rounded-full"></div><span className="text-indigo-700">나 (My Score)</span></div>
+                <div className="flex items-center gap-1"><div className="w-3 h-3 bg-indigo-500 opacity-60 rounded-full"></div><span className="text-indigo-700">나 (My Activities)</span></div>
                 <div className="flex items-center gap-1"><div className="w-3 h-3 bg-slate-500 opacity-60 rounded-full"></div><span className="text-slate-600">업계 평균</span></div>
                 <div className="flex items-center gap-1"><div className="w-3 h-3 bg-amber-400 opacity-60 rounded-full"></div><span className="text-amber-600">Top Performer</span></div>
             </div>
@@ -427,7 +445,10 @@ const CareerReportView: React.FC<CareerReportViewProps> = ({ experiences, user, 
         setShareableLink(null);
 
         try {
-            const cleanExperiences = experiences.map(exp => ({
+            // Sort experiences deterministically to ensure consistent input
+            const sortedExperiences = [...experiences].sort((a, b) => a.id.localeCompare(b.id));
+
+            const cleanExperiences = sortedExperiences.map(exp => ({
                 id: exp.id,
                 activity_name: exp.activity_name || '',
                 activity_date: exp.activity_date || '',
@@ -460,6 +481,8 @@ const CareerReportView: React.FC<CareerReportViewProps> = ({ experiences, user, 
                 config: {
                     systemInstruction: REPORT_SYSTEM_INSTRUCTION,
                     responseMimeType: "application/json",
+                    temperature: 0, // Deterministic generation
+                    seed: 42,       // Fixed seed for consistency
                     thinkingConfig: { thinkingBudget: 1024 }
                 },
             });

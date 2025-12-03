@@ -7,6 +7,7 @@ import StoryBoxTab from './StoryBoxTab';
 interface DataViewsPanelProps {
   experiences: Experience[];
   onShowDetail: (id: string) => void;
+  onUpdate: (id: string, updates: Partial<Experience>) => void;
   onDelete: (id: string) => void;
   onLoadMore: () => void;
   hasMore: boolean;

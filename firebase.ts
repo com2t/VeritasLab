@@ -1,4 +1,4 @@
-import { initializeApp } from "firebase/app";
+import * as firebaseApp from "firebase/app";
 import { 
     getFirestore, 
     collection, 
@@ -16,7 +16,8 @@ import {
     getDocs,
     limit,
     startAfter,
-    writeBatch
+    writeBatch,
+    where
 } from "firebase/firestore";
 import {
     getAuth,
@@ -30,7 +31,8 @@ import {
 import { firebaseConfig } from "./firebaseConfig";
 
 // Initialize Firebase
-const app = initializeApp(firebaseConfig);
+// Cast to any to bypass "Module 'firebase/app' has no exported member 'initializeApp'" error
+const app = (firebaseApp as any).initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 const auth = getAuth(app);
@@ -53,6 +55,7 @@ export {
   limit,
   startAfter,
   writeBatch,
+  where,
   auth,
   onAuthStateChanged,
   createUserWithEmailAndPassword,

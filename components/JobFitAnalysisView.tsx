@@ -99,8 +99,8 @@ const JobFitAnalysisView: React.FC<JobFitAnalysisViewProps> = ({ data }) => {
                                 );
                             })}
                             
-                            {/* Avg Score Polygon */}
-                            <polygon points={avgPoints} fill="rgba(148, 163, 184, 0.2)" stroke="#94a3b8" strokeWidth="2" />
+                            {/* Avg Score Polygon (Changed to Slate Gray for distinct visibility) */}
+                            <polygon points={avgPoints} fill="rgba(100, 116, 139, 0.2)" stroke="#64748b" strokeWidth="2" strokeDasharray="2 2" />
                             
                             {/* My Score Polygon */}
                             <polygon points={myPoints} fill="rgba(79, 70, 229, 0.4)" stroke="#4f46e5" strokeWidth="2" />
@@ -111,8 +111,8 @@ const JobFitAnalysisView: React.FC<JobFitAnalysisViewProps> = ({ data }) => {
                                 <span className="text-indigo-700">나의 점수</span>
                              </div>
                              <div className="flex items-center gap-1">
-                                <div className="w-3 h-3 bg-slate-400 opacity-40 rounded-full"></div>
-                                <span className="text-slate-500">평균 점수</span>
+                                <div className="w-3 h-3 bg-slate-500 opacity-60 rounded-full"></div>
+                                <span className="text-slate-600">업계 평균</span>
                              </div>
                         </div>
                     </div>

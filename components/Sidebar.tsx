@@ -48,7 +48,10 @@ const Sidebar: React.FC<SidebarProps> = ({
             const loadedSessions = snapshot.docs.map(doc => ({
                 id: doc.id,
                 ...doc.data()
-            } as ChatSession));
+            } as ChatSession))
+            // Filter out soft-deleted sessions client-side
+            .filter(session => !session.deletedAt);
+            
             setSessions(loadedSessions);
         });
 
@@ -76,7 +79,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     const handleDeleteClick = async (sessionId: string, e: React.MouseEvent) => {
         e.stopPropagation();
-        if (window.confirm("정말 이 대화를 삭제하시겠습니까?")) {
+        if (window.confirm("이 대화를 휴지통으로 이동하시겠습니까?")) {
             try {
                 setIsDeleting(true);
                 await onDeleteSession(sessionId);
@@ -94,16 +97,16 @@ const Sidebar: React.FC<SidebarProps> = ({
             {/* 모바일용 오버레이 */}
             {isOpen && (
                 <div 
-                    className="fixed inset-0 bg-black/30 z-40 sm:hidden"
+                    className="absolute inset-0 bg-black/30 z-40 sm:hidden"
                     onClick={onClose}
                 />
             )}
 
             {/* 사이드바 패널 */}
             <div className={`
-                fixed top-0 left-0 h-full w-72 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out
+                absolute top-0 left-0 h-full w-72 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out
                 ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-                flex flex-col
+                flex flex-col border-r border-slate-200
             `}>
                 {/* 헤더 */}
                 <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
@@ -212,7 +215,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             }}
                             className="w-full text-xs text-red-500 hover:text-red-700 hover:underline text-center py-1 transition-colors"
                         >
-                            대화 목록 전체 삭제
+                            모든 대화 휴지통으로 이동
                         </button>
                     </div>
                 )}

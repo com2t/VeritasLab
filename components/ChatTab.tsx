@@ -1,84 +1,39 @@
 
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { GoogleGenAI, Part, LiveServerMessage, Modality, Blob, Content, Chat } from '@google/genai';
-import { ChatMessage, Experience, UserProfile, User, JobFitAnalysis } from '../types';
-import { LoadingSpinner, PaperclipIcon, XCircleIcon, PhoneIcon, PaperAirplaneIcon, PhoneHangUpIcon, PauseIcon, PlayIcon, MicrophoneIcon, ChatIcon, FolderIcon, ChartPieIcon, ArrowLeftIcon } from './icons';
-import { db, collection, addDoc, query, orderBy, doc, updateDoc, onSnapshot, setDoc } from '../firebase';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { GoogleGenAI, LiveServerMessage, Modality, Blob as GenAIBlob, Content, Chat, FunctionDeclaration, Type, HarmCategory, HarmBlockThreshold } from '@google/genai';
+import { ChatMessage, Experience, UserProfile, User, JobFitAnalysis, CalendarEvent } from '../types';
+import { LoadingSpinner, PaperclipIcon, XCircleIcon, PhoneIcon, PaperAirplaneIcon, PhoneHangUpIcon, MicrophoneIcon, FolderIcon, ArrowLeftIcon, CalendarIcon, CheckIcon, LinkIcon, PlusIcon, PauseIcon, PlayIcon } from './icons';
+import { db, collection, addDoc, query, orderBy, doc, onSnapshot, setDoc, where, getDocs, getDoc, updateDoc, deleteDoc } from '../firebase';
 import { 
     requestToSaveExperience, 
     saveFinalizedStory, 
-    saveExperienceAnalysis,
+    saveExperienceAnalysis, 
     saveExperienceShell, 
     saveBulkExperiences, 
     showExperienceTable, 
     completeOnboardingCollection, 
-    showJobFitDashboard,
-    createTextChatSystemInstruction 
+    showJobFitDashboard, 
+    offerConversationOptions, 
+    updateUserJobInterest,
+    retrieveDetailedExperience,
+    manageCalendarEvents,
+    createOnboardingSystemInstruction,
+    createEmpathySystemInstruction,
+    createDeepDiveSystemInstruction,
+    createJobFitSystemInstruction,
+    createDataManagerSystemInstruction,
+    createQuickAddSystemInstruction,
+    AgentType
 } from '../utils/chatPrompts';
-import JobFitAnalysisView from './JobFitAnalysisView';
+import { POINT_RULES, ALLOWED_CATEGORIES } from '../constants';
 
-// FIX: A local LiveSession interface is defined for type safety.
+// --- Interfaces ---
 interface LiveSession {
-    sendRealtimeInput(input: { media: Blob }): void;
+    sendRealtimeInput(input: { media: GenAIBlob }): void;
     sendToolResponse(response: { functionResponses: { id: string; name: string; response: { result: string; }; }; }): void;
     close(): void;
 }
 
-// --- Web Speech API type definitions ---
-interface SpeechRecognitionErrorEvent extends Event {
-    readonly error: string;
-    readonly message: string;
-}
-
-interface SpeechRecognitionAlternative {
-    readonly transcript: string;
-    readonly confidence: number;
-}
-
-interface SpeechRecognitionResult {
-    readonly isFinal: boolean;
-    readonly length: number;
-    item(index: number): SpeechRecognitionAlternative;
-    [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionResultList {
-    readonly length: number;
-    item(index: number): SpeechRecognitionResult;
-    [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionEvent extends Event {
-    readonly results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognition {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    start(): void;
-    stop(): void;
-    onresult: (event: SpeechRecognitionEvent) => void;
-    onstart: () => void;
-    onend: () => void;
-    onerror: (event: SpeechRecognitionErrorEvent) => void;
-}
-
-// --- Voice Prompt for Live API ---
-const VOICE_SYSTEM_INSTRUCTION_NATURAL = `You are a friendly and helpful AI career coach. You are speaking with the user over a real-time voice call.
-Your goal is to help them organize their career experiences or just have a casual chat about their day.
-
-Key Behaviors:
-1. **Speak Korean:** All responses must be in natural, spoken Korean.
-2. **Be Conversational:** Keep responses concise (1-3 sentences) to maintain a natural back-and-forth flow. Avoid long monologues.
-3. **Listen Activey:** If the user talks about a project or experience, ask follow-up questions to dig deeper (STAR method).
-4. **Use Tools:** If you identify a distinct experience, use the 'requestToSaveExperience' tool to save it.
-
-Style: Warm, encouraging, professional but casual (like a mentor).
-`;
-
-
-// --- Component Props & Types ---
 interface ChatTabProps {
     onAddExperience: (newExperienceData: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'>) => Promise<string | void>; 
     onUpdateExperience: (storyId: string, updates: Partial<Experience>) => void;
@@ -88,9 +43,10 @@ interface ChatTabProps {
     user: User;
     onSessionChange: (sessionId: string | null) => void;
     isOnboarding: boolean;
-    onJobFitAnalysis?: (data: JobFitAnalysis) => void; // New prop
-    onNavigateToData?: () => void; // New nav prop
-    onNavigateToReport?: () => void; // New nav prop
+    onJobFitAnalysis?: (data: JobFitAnalysis) => void;
+    onNavigateToData?: () => void;
+    onNavigateToReport?: () => void;
+    onEarnPoints: (actionType: keyof typeof POINT_RULES) => Promise<void>;
 }
 type VoiceState = 'idle' | 'connecting' | 'listening' | 'speaking' | 'error';
 type ViewMode = 'landing' | 'chat' | 'call';
@@ -99,28 +55,93 @@ interface ConfirmationRequest {
     id: string;
     summary: string;
     toolName: string;
-    rawData?: any; 
+    rawData: any; 
+    otherResponses?: any[]; // Store responses from parallel tools
 }
 
+interface StoryLinkingRequest {
+    confirmationRequest: ConfirmationRequest;
+    newActivityName: string;
+}
+
+// Updated Quick Suggestions to map to the Agents
 const QUICK_SUGGESTIONS = [
-    "오늘 하루 기록하기 📝",
-    "기억에 남는 프로젝트 정리 📂",
-    "동아리/대외활동 다시보기 🚩",
-    "내 직무 적합도 분석해줘 📊"
+    "추가할 경험이 있어! ➕",          // Maps to Agent 6 (Quick Add)
+    "오늘 하루 어땠냐면... (수다떨기) 🗣️", // Maps to Agent 2
+    "옛날 얘기 좀 해볼까? (스토리 정리) ✍️",      // Maps to Agent 3
+    "내 직무 적합도 봐줘! 📊",           // Maps to Agent 4
+    "저장된 거 보여줘 📂"            // Maps to Agent 5
 ];
 
+// --- Supported MIME Types for Inline Data ---
+const SUPPORTED_INLINE_MIME_TYPES = [
+    'application/pdf',
+    'image/png', 'image/jpeg', 'image/webp', 'image/heic', 'image/heif',
+    'audio/wav', 'audio/mp3', 'audio/aiff', 'audio/aac', 'audio/ogg', 'audio/flac',
+    'video/mp4', 'video/mpeg', 'video/mov', 'video/avi', 'video/x-flv', 'video/mpg', 'video/webm', 'video/wmv', 'video/3gpp'
+];
 
-// --- Audio Helper Functions for Live API ---
-function encode(bytes: Uint8Array) {
-    let binary = '';
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
+// --- Helper Functions for File Processing ---
+const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            if (typeof reader.result === 'string') {
+                resolve(reader.result.split(',')[1]);
+            } else {
+                reject(new Error('Failed to read file'));
+            }
+        };
+        reader.readAsDataURL(file);
+    });
+};
+
+// Helper to remove ** and * from text for display
+const cleanDisplayText = (text: string) => {
+    if (!text) return '';
+    return text.replace(/\*\*/g, '').replace(/\*/g, '');
+};
+
+// Default empty experience fields
+const emptyExperienceFields = {
+    story_summary: '',
+    result_achievement: '',
+    key_insight: '',
+    detailed_content: '',
+    who: '',
+    what: '',
+    when: '',
+    where: '',
+    why: '',
+    how: '',
+    story_title: '',
+    core_competency: '',
+    job_alignment: '',
+    situation: '',
+    task: '',
+    action: '',
+    result_quantitative: '',
+    result_qualitative: '',
+    learning: '',
+    tags: [],
+    skills: [],
+    jobs: [],
+    nlpUnits: []
+};
+
+// --- AUDIO HELPERS FOR LIVE API ---
+const floatTo16BitPCM = (float32Array: Float32Array): ArrayBuffer => {
+    const buffer = new ArrayBuffer(float32Array.length * 2);
+    const view = new DataView(buffer);
+    let offset = 0;
+    for (let i = 0; i < float32Array.length; i++, offset += 2) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
     }
-    return btoa(binary);
-}
+    return buffer;
+};
 
-function decode(base64: string) {
+const base64ToUint8Array = (base64: string): Uint8Array => {
     const binaryString = atob(base64);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
@@ -128,467 +149,341 @@ function decode(base64: string) {
         bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes;
-}
-
-async function decodeAudioData(
-    data: Uint8Array,
-    ctx: AudioContext,
-    sampleRate: number,
-    numChannels: number,
-): Promise<AudioBuffer> {
-    const dataInt16 = new Int16Array(data.buffer);
-    const frameCount = dataInt16.length / numChannels;
-    const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
-
-    for (let channel = 0; channel < numChannels; channel++) {
-        const channelData = buffer.getChannelData(channel);
-        for (let i = 0; i < frameCount; i++) {
-            channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
-        }
-    }
-    return buffer;
-}
-
-function createBlob(data: Float32Array): Blob {
-  const l = data.length;
-  const int16 = new Int16Array(l);
-  for (let i = 0; i < l; i++) {
-    // Clamp values to [-1, 1] before scaling
-    const s = Math.max(-1, Math.min(1, data[i]));
-    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  return {
-    data: encode(new Uint8Array(int16.buffer)),
-    mimeType: 'audio/pcm;rate=16000',
-  };
-}
-
-
-// --- Helper Functions ---
-const fileToGenerativePart = async (file: File): Promise<Part> => {
-    const base64EncodedData = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(file);
-    });
-    return {
-        inlineData: {
-            data: base64EncodedData,
-            mimeType: file.type,
-        },
-    };
 };
 
-const ExperienceTable: React.FC<{ experiences: Experience[] }> = ({ experiences }) => {
-    const { matrix, uniquePeriods, uniqueCategories } = useMemo(() => {
-        const uniquePeriodsSet = new Set<string>();
-        const uniqueCategoriesSet = new Set<string>();
-
-        experiences.forEach(exp => {
-            if (exp.activity_date) uniquePeriodsSet.add(exp.activity_date);
-            if (exp.activity_type) uniqueCategoriesSet.add(exp.activity_type);
-        });
-
-        const sortPeriods = (a: string, b: string) => {
-            const getYear = (s: string) => parseInt(s.match(/\d{4}/)?.[0] || '0');
-            const getTermOrder = (s: string) => {
-                if (s.includes('1학기')) return 1;
-                if (s.includes('여름')) return 2;
-                if (s.includes('2학기')) return 3;
-                if (s.includes('겨울')) return 4;
-                return 5;
-            };
-
-            const yearA = getYear(a);
-            const yearB = getYear(b);
-            if (yearA !== yearB) return yearA - yearB;
-            return getTermOrder(a) - getTermOrder(b);
-        };
-
-        const uniquePeriods = Array.from(uniquePeriodsSet).sort(sortPeriods);
-        // Added '자격증' to the default order
-        const defaultOrder = ['수강과목', '동아리', '스터디', '자격증', '봉사활동', '프로젝트', '공모전', '대외활동', '인턴', '알바'];
-        const uniqueCategories = Array.from(uniqueCategoriesSet).sort((a, b) => {
-             const idxA = defaultOrder.indexOf(a);
-             const idxB = defaultOrder.indexOf(b);
-             if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-             if (idxA !== -1) return -1;
-             if (idxB !== -1) return 1;
-             return a.localeCompare(b);
-        });
-
-        const matrix: Record<string, Record<string, string[]>> = {};
-        
-        uniquePeriods.forEach(period => {
-            matrix[period] = {};
-            uniqueCategories.forEach(cat => {
-                matrix[period][cat] = [];
-            });
-        });
-
-        experiences.forEach(exp => {
-            if (exp.activity_date && exp.activity_type && matrix[exp.activity_date] && matrix[exp.activity_date][exp.activity_type]) {
-                matrix[exp.activity_date][exp.activity_type].push(exp.activity_name);
-            }
-        });
-
-        return { matrix, uniquePeriods, uniqueCategories };
-    }, [experiences]);
-
-    return (
-        <div className="overflow-x-auto border border-slate-200 rounded-lg shadow-sm bg-white my-4">
-            <table className="min-w-full divide-y divide-slate-200">
-                <thead className="bg-slate-50">
-                    <tr>
-                        <th scope="col" className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider sticky left-0 bg-slate-50 z-10 border-r border-slate-200">
-                            시기 / 카테고리
-                        </th>
-                        {uniqueCategories.map(cat => (
-                            <th key={cat} scope="col" className="px-3 py-3 text-left text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
-                                {cat}
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-slate-200 text-sm">
-                    {uniquePeriods.map((period, rowIdx) => (
-                        <tr key={period} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                            <td className="px-3 py-3 whitespace-nowrap font-semibold text-indigo-600 border-r border-slate-200 sticky left-0 bg-inherit z-10">
-                                {period}
-                            </td>
-                            {uniqueCategories.map(cat => (
-                                <td key={`${period}-${cat}`} className="px-3 py-3 align-top">
-                                    {matrix[period][cat].length > 0 ? (
-                                        <div className="flex flex-col gap-1">
-                                            {matrix[period][cat].map((name, i) => (
-                                                <span key={i} className="inline-block bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-xs">
-                                                    {name}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <span className="text-slate-300">-</span>
-                                    )}
-                                </td>
-                            ))}
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    );
-};
-
-// --- Voice Call Overlay Component ---
-const VoiceCallOverlay: React.FC<{ 
-    isOpen: boolean; 
-    onClose: () => void; 
-    status: VoiceState; 
-    transcript?: string;
-}> = ({ isOpen, onClose, status, transcript }) => {
-    if (!isOpen) return null;
-
-    return (
-        <div className="fixed inset-0 bg-gradient-to-br from-indigo-900 via-slate-900 to-black z-50 flex flex-col items-center justify-between py-12 animate-fade-in text-white">
-            <div className="text-center mt-10">
-                <h2 className="text-2xl font-bold tracking-wider mb-2 opacity-90">경험 스택 AI 코치</h2>
-                <p className="text-indigo-200 text-sm font-medium uppercase tracking-widest">{status === 'connecting' ? '연결 중...' : '통화 중'}</p>
-            </div>
-
-            <div className="flex-1 flex items-center justify-center relative w-full">
-                {/* Visualizer Circles */}
-                <div className={`w-32 h-32 rounded-full bg-white/10 blur-xl absolute transition-all duration-700 ${status === 'speaking' ? 'scale-150 opacity-50' : 'scale-100 opacity-20'}`}></div>
-                <div className={`w-48 h-48 rounded-full bg-indigo-500/20 blur-2xl absolute transition-all duration-1000 ${status === 'listening' ? 'scale-125 opacity-60' : 'scale-90 opacity-30'}`}></div>
-                
-                {/* Main Avatar */}
-                <div className="relative w-32 h-32 rounded-full bg-white flex items-center justify-center shadow-[0_0_40px_rgba(255,255,255,0.3)] animate-float">
-                    <span className="text-5xl">🤖</span>
-                    
-                    {/* Ripple Effect when AI speaks */}
-                    {status === 'speaking' && (
-                         <>
-                            <span className="absolute inline-flex h-full w-full rounded-full bg-white opacity-75 animate-ping"></span>
-                         </>
-                    )}
-                </div>
-            </div>
-
-            <div className="px-6 w-full max-w-md text-center h-20 mb-10">
-                <p className="text-lg font-medium text-slate-200 transition-opacity duration-300">
-                    {transcript || (status === 'listening' ? "듣고 있어요..." : "...")}
-                </p>
-            </div>
-
-            <div className="mb-10">
-                <button 
-                    onClick={onClose}
-                    className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center text-white shadow-lg transition-transform hover:scale-110 active:scale-95"
-                >
-                    <PhoneHangUpIcon className="w-8 h-8" />
-                </button>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Main ChatTab Component ---
-const ChatTab: React.FC<ChatTabProps> = ({ onAddExperience, onUpdateExperience, experiences, userProfile, sessionId, user, onSessionChange, isOnboarding, onJobFitAnalysis, onNavigateToData, onNavigateToReport }) => {
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [inputValue, setInputValue] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-    const [attachedUrl, setAttachedUrl] = useState<string>('');
-    const [viewMode, setViewMode] = useState<ViewMode>('landing');
+// --- Live Voice Mode Component ---
+const LiveVoiceMode: React.FC<{
+    onClose: () => void;
+    userProfile: UserProfile | null;
+}> = ({ onClose, userProfile }) => {
+    const [status, setStatus] = useState<VoiceState>('connecting');
+    const [volume, setVolume] = useState(0); // For visualization
     
-    // Voice Call State
-    const [isVoiceCallOpen, setIsVoiceCallOpen] = useState(false);
-    const [voiceCallStatus, setVoiceCallStatus] = useState<VoiceState>('idle');
-    const [voiceTranscript, setVoiceTranscript] = useState('');
-
-    const [isListeningForText, setIsListeningForText] = useState(false);
-    const [confirmationRequest, setConfirmationRequest] = useState<ConfirmationRequest | null>(null);
-    const [lastSavedExperienceId, setLastSavedExperienceId] = useState<string | null>(null);
-    const [showSuggestions, setShowSuggestions] = useState(true);
-
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const chatMessagesRef = useRef<HTMLDivElement>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-    const recognitionRef = useRef<SpeechRecognition | null>(null);
-    const chatRef = useRef<Chat | null>(null);
-
-    // Live API Refs
-    const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
-    const audioContextRef = useRef<{ in: AudioContext | null, out: AudioContext | null }>({ in: null, out: null });
-    const mediaStreamRef = useRef<MediaStream | null>(null);
-    const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    // Refs for cleanup
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const processorRef = useRef<ScriptProcessorNode | null>(null);
+    const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+    const liveSessionRef = useRef<LiveSession | null>(null);
+    
+    // Audio Output Queue
     const nextStartTimeRef = useRef<number>(0);
-    const liveUserTranscriptRef = useRef('');
-    const liveAiTranscriptRef = useRef('');
-    const hasTriggeredInit = useRef(false);
-    const prevSessionIdRef = useRef<string | null>(null);
-
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
-    
-    // Sanitize experiences to avoid Circular JSON errors during initChat
-    const safeExperiences = useMemo(() => {
-        return experiences.map(exp => ({
-            activity_name: exp.activity_name || '',
-            activity_type: exp.activity_type || '',
-            activity_date: exp.activity_date || '',
-            story_title: exp.story_title || '',
-            story_summary: exp.story_summary || ''
-        } as Experience)); 
-    }, [experiences]);
-
-    const initChat = useCallback(async (history: Content[] = []) => {
-        chatRef.current = ai.chats.create({
-            model: 'gemini-2.5-flash',
-            config: {
-                systemInstruction: createTextChatSystemInstruction(safeExperiences, userProfile, isOnboarding),
-                temperature: 0.7,
-                tools: [{ functionDeclarations: [
-                    requestToSaveExperience, 
-                    saveExperienceShell, 
-                    saveBulkExperiences, 
-                    saveFinalizedStory, 
-                    saveExperienceAnalysis, 
-                    showExperienceTable, 
-                    completeOnboardingCollection,
-                    showJobFitDashboard
-                ] }],
-            },
-            history: history,
-        });
-    }, [safeExperiences, userProfile, isOnboarding]);
-
-    // --- Live API (Voice Call) Implementation ---
-    const startVoiceSession = async () => {
-        setIsVoiceCallOpen(true);
-        setVoiceCallStatus('connecting');
-        
-        // Initialize Audio Contexts
-        const inputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        const outputCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        audioContextRef.current = { in: inputCtx, out: outputCtx };
-        nextStartTimeRef.current = 0;
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaStreamRef.current = stream;
-
-            const sessionPromise = ai.live.connect({
-                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-                callbacks: {
-                    onopen: () => {
-                        console.log("Live API Connected");
-                        setVoiceCallStatus('listening');
-                        
-                        // Setup Input Stream
-                        const source = inputCtx.createMediaStreamSource(stream);
-                        const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-                        audioProcessorRef.current = processor;
-
-                        processor.onaudioprocess = (e) => {
-                            const inputData = e.inputBuffer.getChannelData(0);
-                            const pcmBlob = createBlob(inputData);
-                            sessionPromise.then(session => session.sendRealtimeInput({ media: pcmBlob }));
-                        };
-
-                        source.connect(processor);
-                        processor.connect(inputCtx.destination);
-                    },
-                    onmessage: async (msg: LiveServerMessage) => {
-                        const { serverContent } = msg;
-
-                        if (serverContent?.modelTurn?.parts?.[0]?.inlineData?.data) {
-                            // Audio Output
-                            setVoiceCallStatus('speaking');
-                            const base64Audio = serverContent.modelTurn.parts[0].inlineData.data;
-                            const audioBuffer = await decodeAudioData(
-                                decode(base64Audio),
-                                outputCtx,
-                                24000,
-                                1
-                            );
-                            
-                            const source = outputCtx.createBufferSource();
-                            source.buffer = audioBuffer;
-                            source.connect(outputCtx.destination);
-                            
-                            const currentTime = outputCtx.currentTime;
-                            const startTime = Math.max(currentTime, nextStartTimeRef.current);
-                            source.start(startTime);
-                            nextStartTimeRef.current = startTime + audioBuffer.duration;
-                            
-                            audioSourcesRef.current.add(source);
-                            source.onended = () => {
-                                audioSourcesRef.current.delete(source);
-                                if (audioSourcesRef.current.size === 0) {
-                                     setVoiceCallStatus('listening');
-                                }
-                            };
-                        }
-
-                        if (serverContent?.turnComplete) {
-                            setVoiceCallStatus('listening');
-                            setVoiceTranscript('');
-                        }
-                        
-                        if (serverContent?.interrupted) {
-                             audioSourcesRef.current.forEach(s => s.stop());
-                             audioSourcesRef.current.clear();
-                             nextStartTimeRef.current = 0;
-                             setVoiceCallStatus('listening');
-                        }
-
-                        // Tool Calling Support in Voice Mode
-                        if (msg.toolCall) {
-                             for (const fc of msg.toolCall.functionCalls) {
-                                 // Simple handling for requestToSaveExperience in voice mode
-                                 // We just confirm it was heard, actual saving might be tricky without UI confirmation in voice mode.
-                                 // For V1, we will just acknowledge.
-                                 const result = "확인했습니다. (음성 모드에서는 자동 저장됩니다)";
-                                 if (fc.name === 'requestToSaveExperience') {
-                                     const args = fc.args as any;
-                                     // Background save attempt (simplified)
-                                     const newExperience: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'> = {
-                                        type: 'basic', 
-                                        activity_date: args.period || 'Unknown', 
-                                        activity_type: args.category || 'Voice',
-                                        activity_name: args.activity_name || 'Voice Entry', 
-                                        story_summary: args.result || "음성으로 기록됨",
-                                        result_achievement: args.result, 
-                                        key_insight: args.learning,
-                                        detailed_content: `[Voice Entry]\nTask: ${args.task}\nAction: ${args.actions}`,
-                                        what: args.activity_name, when: args.period, where: '', who: '', why: '', how: '',
-                                        story_title: '', core_competency: '', job_alignment: '', situation: '', task: '', action: '', result_quantitative: '', result_qualitative: '', learning: '',
-                                    };
-                                    onAddExperience(newExperience);
-                                 }
-                                 
-                                 sessionPromise.then(session => session.sendToolResponse({
-                                     functionResponses: {
-                                         id: fc.id,
-                                         name: fc.name,
-                                         response: { result: result }
-                                     }
-                                 }));
-                             }
-                        }
-                    },
-                    onclose: () => {
-                        console.log("Live API Closed");
-                        stopVoiceSession();
-                    },
-                    onerror: (err) => {
-                        console.error("Live API Error", err);
-                        setVoiceCallStatus('error');
-                        setTimeout(stopVoiceSession, 2000);
-                    }
-                },
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
-                    },
-                    systemInstruction: VOICE_SYSTEM_INSTRUCTION_NATURAL,
-                    tools: [{ functionDeclarations: [requestToSaveExperience] }]
-                }
-            });
-            sessionPromiseRef.current = sessionPromise;
-
-        } catch (error) {
-            console.error("Failed to start voice session", error);
-            stopVoiceSession();
-        }
-    };
-
-    const stopVoiceSession = () => {
-        // Close session
-        if (sessionPromiseRef.current) {
-            sessionPromiseRef.current.then(session => session.close());
-            sessionPromiseRef.current = null;
-        }
-        
-        // Stop audio tracks
-        if (mediaStreamRef.current) {
-            mediaStreamRef.current.getTracks().forEach(track => track.stop());
-            mediaStreamRef.current = null;
-        }
-
-        // Close Audio Contexts
-        if (audioContextRef.current.in) audioContextRef.current.in.close();
-        if (audioContextRef.current.out) audioContextRef.current.out.close();
-        audioContextRef.current = { in: null, out: null };
-        
-        setIsVoiceCallOpen(false);
-        setVoiceCallStatus('idle');
-    };
-
+    const audioQueueRef = useRef<AudioBufferSourceNode[]>([]);
 
     useEffect(() => {
-        if (!sessionId) {
-            setMessages([]);
-            initChat([]); 
-            setViewMode('landing');
-            hasTriggeredInit.current = false;
-            prevSessionIdRef.current = null;
-            return;
-        }
+        let isMounted = true;
 
-        if (sessionId !== prevSessionIdRef.current) {
-             prevSessionIdRef.current = sessionId;
-             
-             if (sessionId.startsWith('onboarding-')) {
-                 setViewMode('landing');
-             } else {
-                 setViewMode('chat');
-             }
-             setShowSuggestions(true);
+        const initLiveSession = async () => {
+            try {
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+                
+                // Initialize Audio Context
+                const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+                const audioCtx = new AudioContextClass({ sampleRate: 16000 }); // Input sample rate
+                audioContextRef.current = audioCtx;
+
+                // Get Microphone Stream
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: {
+                    sampleRate: 16000,
+                    channelCount: 1,
+                    echoCancellation: true,
+                    autoGainControl: true,
+                    noiseSuppression: true
+                }});
+                streamRef.current = stream;
+
+                // Create Connect Promise
+                const sessionPromise = ai.live.connect({
+                    model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                    config: {
+                        responseModalities: [Modality.AUDIO],
+                        speechConfig: {
+                            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } }
+                        },
+                        systemInstruction: {
+                            parts: [{ text: `You are a friendly, enthusiastic career coach friend for ${userProfile?.nickname || 'friend'}. Keep your responses concise, warm, and natural (banmal). Use short sentences suitable for voice conversation. Do NOT read out lists or long data.` }]
+                        }
+                    },
+                    callbacks: {
+                        onopen: async () => {
+                            if (!isMounted) return;
+                            console.log("Live Session Connected");
+                            setStatus('listening');
+                            
+                            // Setup Input Processing
+                            const source = audioCtx.createMediaStreamSource(stream);
+                            const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+                            
+                            source.connect(processor);
+                            processor.connect(audioCtx.destination);
+                            
+                            sourceRef.current = source;
+                            processorRef.current = processor;
+
+                            processor.onaudioprocess = (e) => {
+                                const inputData = e.inputBuffer.getChannelData(0);
+                                
+                                // Visualization Volume
+                                let sum = 0;
+                                for(let i=0; i<inputData.length; i++) sum += inputData[i] * inputData[i];
+                                const rms = Math.sqrt(sum / inputData.length);
+                                setVolume(Math.min(1, rms * 5)); // Amplify for visual
+
+                                // Convert to 16-bit PCM for Gemini
+                                const pcmData = floatTo16BitPCM(inputData);
+                                const base64Data = btoa(String.fromCharCode(...new Uint8Array(pcmData)));
+                                
+                                sessionPromise.then(session => {
+                                    session.sendRealtimeInput({
+                                        media: {
+                                            mimeType: 'audio/pcm;rate=16000',
+                                            data: base64Data
+                                        }
+                                    });
+                                });
+                            };
+                        },
+                        onmessage: async (msg: LiveServerMessage) => {
+                            if (!isMounted) return;
+                            
+                            // Handle Audio Output
+                            const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+                            if (audioData) {
+                                setStatus('speaking');
+                                const audioBytes = base64ToUint8Array(audioData);
+                                // Decode raw PCM (24000Hz default from Gemini Live)
+                                const audioBuffer = await decodeAudioData(audioBytes, audioCtx);
+                                playAudio(audioBuffer, audioCtx);
+                            }
+
+                            if (msg.serverContent?.turnComplete) {
+                                setStatus('listening');
+                            }
+                        },
+                        onclose: () => {
+                            console.log("Live Session Closed");
+                            if (isMounted) onClose();
+                        },
+                        onerror: (err) => {
+                            console.error("Live Session Error", err);
+                            setStatus('error');
+                        }
+                    }
+                });
+
+                liveSessionRef.current = await sessionPromise;
+
+            } catch (error) {
+                console.error("Failed to initialize Live Session", error);
+                setStatus('error');
+            }
+        };
+
+        initLiveSession();
+
+        return () => {
+            isMounted = false;
+            cleanup();
+        };
+    }, [onClose, userProfile]);
+
+    const decodeAudioData = async (data: Uint8Array, ctx: AudioContext) => {
+        // Raw PCM to AudioBuffer
+        // Gemini returns 24000Hz, 1 channel, 16-bit PCM
+        const sampleRate = 24000;
+        const numChannels = 1;
+        const dataInt16 = new Int16Array(data.buffer);
+        const frameCount = dataInt16.length;
+        
+        const audioBuffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+        const channelData = audioBuffer.getChannelData(0);
+        
+        for (let i = 0; i < frameCount; i++) {
+            channelData[i] = dataInt16[i] / 32768.0;
+        }
+        return audioBuffer;
+    };
+
+    const playAudio = (buffer: AudioBuffer, ctx: AudioContext) => {
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        
+        const currentTime = ctx.currentTime;
+        // Schedule next chunk
+        const startTime = Math.max(currentTime, nextStartTimeRef.current);
+        source.start(startTime);
+        nextStartTimeRef.current = startTime + buffer.duration;
+        
+        audioQueueRef.current.push(source);
+        source.onended = () => {
+            audioQueueRef.current = audioQueueRef.current.filter(s => s !== source);
+            if (audioQueueRef.current.length === 0) {
+                setStatus(prev => prev === 'speaking' ? 'listening' : prev);
+            }
+        };
+    };
+
+    const cleanup = () => {
+        if (liveSessionRef.current) {
+            try { liveSessionRef.current.close(); } catch(e) {}
+            liveSessionRef.current = null;
+        }
+        if (streamRef.current) {
+            streamRef.current.getTracks().forEach(track => track.stop());
+            streamRef.current = null;
+        }
+        if (processorRef.current) {
+            try { processorRef.current.disconnect(); } catch(e) {}
+            processorRef.current = null;
+        }
+        if (sourceRef.current) {
+            try { sourceRef.current.disconnect(); } catch(e) {}
+            sourceRef.current = null;
+        }
+        // SAFELY close AudioContext
+        if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+            audioContextRef.current.close().catch(e => console.warn("Failed to close AudioContext", e));
         }
         
+        audioQueueRef.current.forEach(s => {
+            try { s.stop(); } catch(e) {}
+        });
+        audioQueueRef.current = [];
+    };
+
+    const handleClose = () => {
+        cleanup();
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 z-[100] bg-gradient-to-br from-indigo-900 via-slate-900 to-black flex flex-col items-center justify-center text-white animate-fade-in">
+            <button 
+                onClick={handleClose} 
+                className="absolute top-6 right-6 p-3 bg-white/10 rounded-full hover:bg-white/20 transition-colors"
+            >
+                <XCircleIcon className="w-8 h-8" />
+            </button>
+
+            <div className="flex-1 flex flex-col items-center justify-center w-full max-w-md p-8 text-center">
+                <div className="relative mb-12">
+                    {/* Visualizer Circles */}
+                    <div className={`absolute inset-0 bg-indigo-500/30 rounded-full blur-2xl transition-all duration-100 ease-out`} 
+                         style={{ transform: `scale(${1 + volume * 2})` }}></div>
+                    <div className={`absolute inset-0 bg-indigo-400/20 rounded-full blur-xl transition-all duration-100 ease-out`} 
+                         style={{ transform: `scale(${1 + volume * 1.5})` }}></div>
+                    
+                    <div className="relative z-10 w-32 h-32 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(99,102,241,0.5)]">
+                        <MicrophoneIcon className="w-12 h-12 text-white/90" />
+                    </div>
+                </div>
+
+                <h2 className="text-2xl font-bold mb-4">
+                    {status === 'connecting' && "연결 중..."}
+                    {status === 'listening' && "듣고 있어요..."}
+                    {status === 'speaking' && "대답하는 중..."}
+                    {status === 'error' && "오류가 발생했습니다"}
+                </h2>
+                
+                <p className="text-slate-300 text-sm mb-12 max-w-xs leading-relaxed">
+                    AI 코치와 실시간으로 대화하며<br/>경험을 더 자연스럽게 정리해보세요.
+                </p>
+
+                <div className="flex items-center gap-6">
+                    <button 
+                        onClick={handleClose}
+                        className="w-16 h-16 rounded-full bg-red-500/90 hover:bg-red-600 flex items-center justify-center shadow-lg transition-all transform hover:scale-105"
+                    >
+                        <PhoneHangUpIcon className="w-8 h-8 text-white" />
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+
+// --- ChatTab Component ---
+const ChatTab: React.FC<ChatTabProps> = ({ 
+    onAddExperience, 
+    onUpdateExperience,
+    experiences, 
+    userProfile, 
+    sessionId, 
+    user, 
+    onSessionChange,
+    isOnboarding,
+    onJobFitAnalysis,
+    onNavigateToData,
+    onNavigateToReport,
+    onEarnPoints
+}) => {
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [input, setInput] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [confirmationRequest, setConfirmationRequest] = useState<ConfirmationRequest | null>(null);
+    const [storyLinkingRequest, setStoryLinkingRequest] = useState<StoryLinkingRequest | null>(null);
+    const [viewMode, setViewMode] = useState<ViewMode>('chat');
+    const [showOptions, setShowOptions] = useState<{message: string, options: string[]} | null>(null);
+    
+    // New State for Tool Processing (Debouncing)
+    const [isToolProcessing, setIsToolProcessing] = useState(false);
+    
+    // Voice Mode State
+    const [isVoiceMode, setIsVoiceMode] = useState(false);
+    
+    // Calendar Context State
+    const [calendarContext, setCalendarContext] = useState<string>("");
+
+    const messagesEndRef = useRef<HTMLDivElement | null>(null);
+    const chatRef = useRef<Chat | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    
+    const [pendingAttachment, setPendingAttachment] = useState<{
+        file: File;
+        base64: string;
+        mimeType: string;
+    } | null>(null);
+
+    // Fetch Calendar Context on Mount/Update
+    useEffect(() => {
+        const fetchCalendarContext = async () => {
+            if (!user) return;
+            const today = new Date();
+            const startStr = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1).toISOString().split('T')[0]; // Yesterday
+            const endStr = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 7).toISOString().split('T')[0]; // +7 Days
+
+            try {
+                const eventsRef = collection(db, 'users', user.uid, 'calendarEvents');
+                const q = query(eventsRef, where('date', '>=', startStr), where('date', '<=', endStr));
+                const snapshot = await getDocs(q);
+                
+                const events = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as CalendarEvent));
+                
+                if (events.length > 0) {
+                    const ctxString = events.map(e => {
+                        const isPast = new Date(e.date) < new Date(new Date().setHours(0,0,0,0));
+                        const isToday = e.date === new Date().toISOString().split('T')[0];
+                        const status = isToday ? "[TODAY]" : isPast ? "[PAST]" : "[UPCOMING]";
+                        return `- [ID: ${e.id}] ${status} ${e.date} (${e.category}): ${e.title} [Type: ${e.type}]`;
+                    }).join('\n');
+                    setCalendarContext(`[User's Recent/Upcoming Schedule]\n${ctxString}`);
+                } else {
+                    setCalendarContext("");
+                }
+            } catch (e) {
+                console.error("Failed to fetch calendar context", e);
+            }
+        };
+        fetchCalendarContext();
+    }, [user, messages.length]);
+
+    // Firestore Integration: Load Messages
+    useEffect(() => {
+        if (!sessionId || !user) return;
+
         const messagesRef = collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages');
         const q = query(messagesRef, orderBy('createdAt', 'asc'));
 
@@ -598,725 +493,733 @@ const ChatTab: React.FC<ChatTabProps> = ({ onAddExperience, onUpdateExperience, 
                 ...doc.data()
             } as ChatMessage));
             setMessages(loadedMessages);
-            
-            if (loadedMessages.length > 0) {
-                setShowSuggestions(false);
-            } else {
-                setShowSuggestions(true);
-            }
-            
-            const history: Content[] = loadedMessages.map(msg => ({
-                role: msg.sender === 'ai' ? 'model' : 'user',
-                parts: [{ text: msg.text }]
-            }));
-            
-            if (!chatRef.current) {
-                initChat(history);
-            }
         });
+
+        // Update last opened time
+        const sessionRef = doc(db, 'users', user.uid, 'chatSessions', sessionId);
+        updateDoc(sessionRef, { updatedAt: new Date().toISOString() }).catch(() => {});
 
         return () => unsubscribe();
-    }, [sessionId, user.uid, initChat]);
+    }, [sessionId, user]);
 
-    const AiMessage: React.FC<{ msg: ChatMessage }> = ({ msg }) => (
-        <div className="message flex gap-3 animate-fade-in-up">
-            <div className="message-avatar w-10 h-10 rounded-full flex items-center justify-center text-xl flex-shrink-0 bg-gradient-to-br from-indigo-500 to-purple-600 text-white">
-                🤖
-            </div>
-            <div className="message-content max-w-lg md:max-xl p-3 px-4 rounded-2xl rounded-bl-lg bg-slate-100 text-slate-800 leading-relaxed shadow-sm overflow-x-auto">
-                <p style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</p>
-                {msg.component}
-            </div>
-        </div>
-    );
-    
-    const UserMessage: React.FC<{ text: string }> = ({ text }) => (
-        <div className="message flex gap-3 self-end flex-row-reverse animate-fade-in-up">
-            <div className="message-avatar w-10 h-10 rounded-full flex items-center justify-center text-xl flex-shrink-0 bg-emerald-500 text-white">
-                👤
-            </div>
-            <div className="message-content max-w-lg md:max-xl p-3 px-4 rounded-2xl rounded-br-lg bg-indigo-500 text-white leading-relaxed shadow-sm">
-                <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
-            </div>
-        </div>
-    );
-    
-    const ConfirmationComponent: React.FC<{ onConfirm: () => void; onCancel: () => void; }> = ({ onConfirm, onCancel }) => (
-        <div className="mt-4 pt-3 border-t border-slate-200/80 flex items-center justify-end gap-3">
-            <button onClick={onCancel} className="px-4 py-1.5 text-sm font-semibold text-slate-700 bg-slate-200 rounded-lg hover:bg-slate-300 transition-colors">
-                수정하기
-            </button>
-            <button onClick={onConfirm} className="px-4 py-1.5 text-sm font-semibold text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 transition-colors">
-                저장하기
-            </button>
-        </div>
-    );
-    
-    const QuickSuggestions = () => {
-        if (!showSuggestions) return null;
-        
-        return (
-            <div className="absolute bottom-[80px] left-0 right-0 flex gap-2 px-4 py-2 overflow-x-auto scrollbar-hide bg-gradient-to-t from-white via-white/80 to-transparent z-10">
-                {QUICK_SUGGESTIONS.map((suggestion, index) => (
-                    <button
-                        key={index}
-                        onClick={() => handleSuggestionClick(suggestion)}
-                        className="flex-shrink-0 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium rounded-full border border-indigo-100 transition-all shadow-sm active:scale-95 whitespace-nowrap backdrop-blur-sm"
-                    >
-                        {suggestion}
-                    </button>
-                ))}
-            </div>
-        );
-    };
-
+    // Initial Greeting Effect
     useEffect(() => {
-        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (SpeechRecognition) {
-            const recognition: SpeechRecognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-            recognition.lang = 'ko-KR';
+        const sendInitialGreeting = async () => {
+            if (!user || !sessionId) return;
 
-            recognition.onresult = (event: SpeechRecognitionEvent) => {
-                const transcript = event.results[0][0].transcript;
-                setInputValue(prev => (prev ? prev + ' ' : '') + transcript);
-            };
-            recognition.onstart = () => setIsListeningForText(true);
-            recognition.onend = () => setIsListeningForText(false);
-            recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-                console.error('Speech recognition error:', event.error);
-                setIsListeningForText(false);
-            };
-            recognitionRef.current = recognition;
-        } else {
-            console.warn("Speech Recognition API is not supported in this browser.");
-        }
-        return () => recognitionRef.current?.stop();
-    }, []);
+            try {
+                const messagesRef = collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages');
+                const snapshot = await getDocs(messagesRef);
+                
+                if (snapshot.empty) {
+                    let initialText = "";
+                    if (isOnboarding) {
+                        initialText = "반가워! 👋 나는 너의 경험 정리를 도와줄 AI 코치야.\n\n먼저 너에 대해 조금 더 알고 싶어. 동아리나 프로젝트 같은 활동 경험이 있으면 하나씩 물어볼게. \n\n첫 번째로, **동아리**나 **학회** 활동 경험이 있어? 있다면 **활동명**과 **시기(언제)**를 알려줘!";
+                    } else {
+                        const name = userProfile?.nickname || userProfile?.name || '친구';
+                        initialText = `안녕 ${name}! 👋\n오늘 하루는 어땠어? 특별한 일이 있었거나 기록하고 싶은 경험이 있다면 언제든 말해줘!`;
+                    }
 
-    const handleToggleListen = () => {
-        if (!recognitionRef.current) return;
-        if (isListeningForText) {
-            recognitionRef.current.stop();
-        } else {
-            recognitionRef.current.start();
-        }
-    };
-
-    const persistMessage = async (text: string, sender: 'user' | 'ai', sid: string) => {
-        const newMessage: Omit<ChatMessage, 'id'> = {
-            text,
-            sender,
-            createdAt: new Date().toISOString()
-        };
-        
-        try {
-            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sid, 'messages'), newMessage);
-        } catch (e) {
-            console.error("Error adding message:", e);
-        }
-        
-        const sessionRef = doc(db, 'users', user.uid, 'chatSessions', sid);
-
-        try {
-            await updateDoc(sessionRef, {
-                lastMessage: text,
-                updatedAt: new Date().toISOString()
-            });
-        } catch (e: any) {
-            if (e.code === 'not-found' || e.message?.includes("No document to update")) {
-                const title = sid.includes('onboarding') ? '온보딩' : '새로운 대화';
-                await setDoc(sessionRef, {
-                    title: title,
-                    createdAt: new Date().toISOString(),
-                    lastMessage: text,
-                    updatedAt: new Date().toISOString()
-                });
-            } else {
-                console.error("Error updating session:", e);
+                    await addDoc(messagesRef, {
+                        text: initialText,
+                        sender: 'ai',
+                        createdAt: new Date().toISOString()
+                    });
+                }
+            } catch (error) {
+                console.error("Error sending initial greeting:", error);
             }
-        }
-    };
+        };
 
-    const ensureSession = async (): Promise<string> => {
-        if (sessionId) return sessionId;
-        const newSessionId = `session_${Date.now()}`;
-        const today = new Date();
-        const dateString = `${today.getFullYear()}. ${today.getMonth() + 1}. ${today.getDate()}. 대화`;
-        
-        const newSessionRef = doc(collection(db, 'users', user.uid, 'chatSessions'), newSessionId);
-        await setDoc(newSessionRef, {
-            createdAt: new Date().toISOString(),
-            title: dateString,
-            lastMessage: '',
-            updatedAt: new Date().toISOString()
-        });
-        
-        onSessionChange(newSessionId);
-        return newSessionId;
-    };
+        sendInitialGreeting();
+    }, [sessionId, user, isOnboarding]);
 
-    const addAiMessage = useCallback(async (text: string, component?: React.ReactNode) => {
-        const newMsg = { id: Date.now().toString() + Math.random(), sender: 'ai' as const, text, component };
-        setMessages(prev => [...prev, newMsg]);
-        return newMsg.id;
-    }, []);
-
-    const addUserMessage = useCallback((text: string) => {
-        setMessages(prev => [...prev, { id: Date.now().toString() + Math.random(), sender: 'user', text }]);
-    }, []);
-    
-    const scrollToBottom = () => {
-        if (chatMessagesRef.current) {
-            chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
-        }
-    };
-
+    // Scroll to bottom
     useEffect(() => {
-        scrollToBottom();
-    }, [messages, showSuggestions]);
-    
+        if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [messages, loading]);
+
+    // Auto-resize textarea
     useEffect(() => {
         if (textareaRef.current) {
             textareaRef.current.style.height = 'auto';
             textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
         }
-    }, [inputValue]);
+    }, [input]);
 
-    useEffect(() => {
-        if (viewMode === 'chat') {
-            if (!chatRef.current) {
-                 initChat([]);
-            }
+    const initializeChat = () => {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+                
+        let systemInstruction = "";
+        let tools: FunctionDeclaration[] = [];
 
-            if (messages.length === 0 && !hasTriggeredInit.current) {
-                 hasTriggeredInit.current = true;
-                 
-                 if (isOnboarding) {
-                     const triggerOnboarding = async () => {
-                         try {
-                             setIsLoading(true);
-                             const result = await chatRef.current?.sendMessage({
-                                 message: " " 
-                             });
-                             if (result && result.text) {
-                                 await persistMessage(result.text, 'ai', sessionId || `onboarding-${user.uid}`);
-                             }
-                         } catch(e) {
-                             console.error(e);
-                             addAiMessage("안녕하세요! 경험 스택 코치입니다. 경험 정리를 시작해볼까요?");
-                         } finally {
-                             setIsLoading(false);
-                         }
-                     };
-                     triggerOnboarding();
-                 } else {
-                     addAiMessage(`안녕하세요 ${userProfile?.name || '사용자'}님! 경험 스택 코치입니다. \n어떤 활동을 정리하거나, 새로운 이야기를 만들어볼까요?`);
-                 }
-            }
+        if (isOnboarding) {
+            systemInstruction = createOnboardingSystemInstruction(userProfile, []);
+            tools = [saveExperienceShell, completeOnboardingCollection];
+        } else {
+            const contextExps = experiences.map(e => 
+                `- [ID: ${e.id}] ${e.activity_name} (${e.activity_date}) / Type: ${e.activity_type} / (Status: ${e.type === 'story' ? 'Has Story' : 'Basic'})`
+            );
+            systemInstruction = createDeepDiveSystemInstruction(userProfile, contextExps, calendarContext);
+            tools = [
+                requestToSaveExperience, 
+                saveFinalizedStory, 
+                saveExperienceShell, 
+                showExperienceTable, 
+                showJobFitDashboard, 
+                retrieveDetailedExperience, 
+                manageCalendarEvents, 
+                offerConversationOptions
+            ];
         }
-    }, [viewMode, safeExperiences, userProfile, isOnboarding]);
 
-    const handleSendMessage = async (textOverride?: string) => {
-        const textToSend = textOverride || inputValue;
-        if (!textToSend.trim() && attachedFiles.length === 0 && !attachedUrl) return;
-        if (isLoading) return;
+        // Configure Safety Settings to be permissive for personal conversations
+        const safetySettings = [
+            { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        ];
 
-        setInputValue('');
-        setAttachedFiles([]);
-        setAttachedUrl('');
-        setIsLoading(true);
-        setShowSuggestions(false); 
+        // Robust history creation: Filter out messages without text to avoid API errors
+        const history = messages
+            .filter(m => m.text && m.text.trim() !== '')
+            .map(m => ({
+                role: m.sender === 'user' ? 'user' : 'model',
+                parts: [{ text: m.text }]
+            }));
+
+        chatRef.current = ai.chats.create({
+            model: 'gemini-2.5-flash',
+            history: history,
+            config: {
+                systemInstruction,
+                tools: tools.map(tool => ({ functionDeclarations: [tool] })),
+                temperature: 0.4,
+                safetySettings: safetySettings
+            }
+        });
+    }
+
+    const handleConfirmTool = async () => {
+        if (!confirmationRequest || isToolProcessing) return; 
         
-        const activeSessionId = await ensureSession();
-        
-        await persistMessage(textToSend, 'user', activeSessionId);
-        
-        if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto';
-        }
+        setIsToolProcessing(true);
 
         try {
-            if (!chatRef.current) throw new Error("Chat not initialized");
-
-            const parts: (string | Part)[] = [{ text: textToSend }];
+            let finalData = confirmationRequest.rawData;
+            let toolName = confirmationRequest.toolName;
             
-            if (attachedFiles.length > 0) {
-                for (const file of attachedFiles) {
-                    const part = await fileToGenerativePart(file);
-                    parts.push(part);
-                }
-            }
+            let resultMessage = "완료되었습니다.";
+            let resultData: any = { result: "success" };
 
-            if (attachedUrl) {
-                parts.push({ text: `\n[User attached URL: ${attachedUrl}]` });
-            }
-
-            const result = await chatRef.current.sendMessage({
-                message: parts
-            });
-
-            const responseText = result.text;
-            const functionCalls = result.functionCalls;
+            // Execute the Tool Logic
+            if (toolName === 'requestToSaveExperience') {
+                await onAddExperience({
+                    ...emptyExperienceFields,
+                    ...finalData,
+                    type: 'basic',
+                    story_summary: finalData.summary,
+                    detailed_content: `[STAR Details]\nS: ${finalData.situation}\nT: ${finalData.task}\nA: ${finalData.actions.join(', ')}\nR: ${finalData.result}\nL: ${finalData.learning}`
+                });
+                resultMessage = `✅ '${finalData.activity_name}' 활동이 저장되었습니다.`;
+                onEarnPoints('CREATE_EXP');
             
-            if (functionCalls && functionCalls.length > 0) {
-                const call = functionCalls[0];
-                const args = call.args;
+            } else if (toolName === 'saveFinalizedStory') {
+                await onAddExperience({
+                    ...emptyExperienceFields,
+                    ...finalData,
+                    type: 'story', 
+                    core_competency: finalData.core_competency,
+                    job_alignment: finalData.job_alignment
+                });
+                resultMessage = `✨ '${finalData.story_title}' 스토리가 저장되었습니다!`;
+                onEarnPoints('CREATE_STORY');
+
+            } else if (toolName === 'saveExperienceShell') {
+                await onAddExperience({
+                    ...emptyExperienceFields,
+                    activity_name: finalData.activity_name,
+                    activity_type: finalData.activity_type,
+                    activity_date: finalData.activity_date,
+                    type: 'basic',
+                    detailed_content: '' 
+                });
+                resultMessage = `📂 '${finalData.activity_name}' 기본 정보가 저장되었습니다.`;
+                onEarnPoints('CREATE_EXP');
+
+            } else if (toolName === 'manageCalendarEvents') {
+                const op = finalData.operation;
+                const evts = Array.isArray(finalData.events) ? finalData.events : [finalData.events];
                 
-                if (call.name === 'requestToSaveExperience') {
-                    const actionsList = Array.isArray(args.actions) ? args.actions.join('\n- ') : args.actions;
-                    const summaryText = `[활동명] ${args.activity_name}\n[결과] ${args.result}\n\n[행동]\n- ${actionsList}`;
-                    
-                    const aiText = `경험(Fact) 추출이 완료되었습니다. 저장할까요?\n\n${summaryText}`;
-                    await persistMessage(aiText, 'ai', activeSessionId);
+                for (const evt of evts) {
+                    if (op === 'ADD') {
+                        await addDoc(collection(db, 'users', user.uid, 'calendarEvents'), {
+                            ...evt,
+                            createdAt: new Date().toISOString()
+                        });
+                    } else if (op === 'UPDATE' && evt.id) {
+                        const ref = doc(db, 'users', user.uid, 'calendarEvents', evt.id);
+                        const { id, ...updateData } = evt; 
+                        await updateDoc(ref, updateData);
+                    } else if (op === 'DELETE' && evt.id) {
+                        await deleteDoc(doc(db, 'users', user.uid, 'calendarEvents', evt.id));
+                    }
+                }
+                resultMessage = op === 'ADD' ? "일정을 등록했습니다." : op === 'UPDATE' ? "일정을 업데이트했습니다." : "일정을 삭제했습니다.";
+            }
 
-                    addAiMessage(aiText,
-                        <ConfirmationComponent
-                            onConfirm={() => handleConfirmSave({
-                                id: call.id,
-                                summary: summaryText,
-                                toolName: 'requestToSaveExperience',
-                                rawData: args
-                            })}
-                            onCancel={() => handleCancelSave({
-                                id: call.id,
-                                summary: summaryText,
-                                toolName: 'requestToSaveExperience'
-                            })}
-                        />
-                    );
-                } else if (call.name === 'saveFinalizedStory') {
-                     const aiText = `스토리가 완성되었습니다. 저장할까요?\n\n[${args.story_title}]\n${args.star_text_short}`;
-                     await persistMessage(aiText, 'ai', activeSessionId);
+            // --- Send Tool Response back to Model ---
+            let isFreshSession = false;
+            
+            if (!chatRef.current) {
+                initializeChat();
+                isFreshSession = true;
+            }
 
-                     addAiMessage(aiText,
-                        <ConfirmationComponent
-                             onConfirm={() => handleConfirmSave({
-                                id: call.id,
-                                summary: args.star_text_short as string,
-                                toolName: 'saveFinalizedStory',
-                                rawData: args
-                             })}
-                             onCancel={() => handleCancelSave({
-                                id: call.id,
-                                summary: args.star_text_short as string,
-                                toolName: 'saveFinalizedStory'
-                             })}
-                        />
-                     );
+            if (chatRef.current) {
+                try {
+                    if (isFreshSession) {
+                        await chatRef.current.sendMessage({ 
+                            message: `[System] The tool '${toolName}' was successfully executed by the user's confirmation. Result: ${JSON.stringify(resultData)}` 
+                        });
+                         setMessages(prev => [
+                            ...prev,
+                            { id: `sys-${Date.now()}`, text: resultMessage, sender: 'ai', component: <CheckIcon className="w-5 h-5 text-green-500" /> }
+                        ]);
+                    } else {
+                        const toolResponseParts: any[] = [
+                            {
+                                functionResponse: {
+                                    name: toolName,
+                                    response: resultData
+                                }
+                            }
+                        ];
+                        
+                        if (confirmationRequest.otherResponses) {
+                            confirmationRequest.otherResponses.forEach(r => {
+                                toolResponseParts.push({
+                                    functionResponse: {
+                                        name: r.name,
+                                        response: r.response
+                                    }
+                                });
+                            });
+                        }
 
-                } else if (call.name === 'saveExperienceShell') {
-                     const newShell: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'> = {
-                        type: 'basic',
-                        activity_name: args.activity_name as string,
-                        activity_date: args.activity_date as string,
-                        activity_type: args.activity_type ? (args.activity_type as string) : '미분류',
-                        what: '', when: args.activity_date as string, where: '', who: '', why: '', how: '', result_achievement: '', key_insight: '', detailed_content: '',
-                        story_title: '', story_summary: '', core_competency: '', job_alignment: '', situation: '', task: '', action: '', result_quantitative: '', result_qualitative: '', learning: ''
-                     };
-                     await onAddExperience(newShell);
-                     
-                     const toolResult = await chatRef.current.sendMessage({
-                         message: [{ functionResponse: { name: 'saveExperienceShell', id: call.id, response: { result: "Success." } } }]
-                     });
-                     
-                     if (toolResult.text && !toolResult.text.includes("saveExperienceShell_response")) {
-                         await persistMessage(toolResult.text, 'ai', activeSessionId);
-                     }
-
-                } else if (call.name === 'save_bulk_experiences') {
-                    const list = args.experience_list as any[];
-                    if (Array.isArray(list)) {
-                        for (const item of list) {
-                             const newShell: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'> = {
-                                type: 'basic',
-                                activity_name: item.title,
-                                activity_date: item.period || '날짜 미상',
-                                activity_type: item.category || '미분류',
-                                what: '', when: item.period || '', where: '', who: '', why: '', how: '', result_achievement: '', key_insight: '', detailed_content: '',
-                                story_title: '', story_summary: '', core_competency: '', job_alignment: '', situation: '', task: '', action: '', result_quantitative: '', result_qualitative: '', learning: ''
-                            };
-                            await onAddExperience(newShell);
+                        const nextResponse = await chatRef.current.sendMessage({ message: toolResponseParts });
+                        const nextText = nextResponse.text;
+                        
+                        setMessages(prev => [
+                            ...prev,
+                            { id: `sys-${Date.now()}`, text: resultMessage, sender: 'ai', component: <CheckIcon className="w-5 h-5 text-green-500" /> }, 
+                            { id: `ai-${Date.now()+1}`, text: nextText, sender: 'ai' }
+                        ]);
+                        
+                        if (sessionId && nextText) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: nextText,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
+                        
+                        const calls = nextResponse.functionCalls;
+                        if (calls && calls.length > 0) {
+                            const optCall = calls.find(c => c.name === 'offerConversationOptions');
+                            if (optCall) {
+                                setShowOptions(optCall.args as any);
+                            }
                         }
                     }
-
-                    const toolResult = await chatRef.current.sendMessage({
-                        message: [{ functionResponse: { name: 'save_bulk_experiences', id: call.id, response: { result: `Saved ${list?.length || 0} items.` } } }]
-                    });
-
-                    if (toolResult.text && !toolResult.text.includes("save_bulk_experiences")) {
-                        await persistMessage(toolResult.text, 'ai', activeSessionId);
-                    }
-
-                } else if (call.name === 'showExperienceTable') {
-                     const aiText = "네, 지금까지 수집된 경험들을 표로 정리해드릴게요.";
-                     await persistMessage(aiText, 'ai', activeSessionId);
-                     
-                     addAiMessage(aiText, <ExperienceTable experiences={experiences} />);
-                     
-                     await chatRef.current.sendMessage({
-                         message: [{ functionResponse: { name: 'showExperienceTable', id: call.id, response: { result: "Table shown." } } }]
-                     });
-
-                } else if (call.name === 'completeOnboardingCollection') {
-                    if (user) {
-                        await updateDoc(doc(db, 'users', user.uid), {
-                            isOnboardingFinished: true
-                        });
-                    }
-
-                    const toolResult = await chatRef.current.sendMessage({
-                        message: [{ functionResponse: { name: 'completeOnboardingCollection', id: call.id, response: { result: "Onboarding completed. User unlocked." } } }]
-                    });
-
-                    if (toolResult.text) {
-                        await persistMessage(toolResult.text, 'ai', activeSessionId);
-                    }
-                
-                } else if (call.name === 'saveExperienceAnalysis') {
-                    if (lastSavedExperienceId) {
-                        const { skills, jobs, nlpUnits } = args;
-                        onUpdateExperience(lastSavedExperienceId, { 
-                            skills: skills as string[], 
-                            jobs: jobs as string[], 
-                            nlpUnits: nlpUnits as any 
-                        });
-                    }
-
-                    await chatRef.current.sendMessage({
-                        message: [{ functionResponse: { name: 'saveExperienceAnalysis', id: call.id, response: { result: "Analysis saved successfully." } } }]
-                    });
-                
-                } else if (call.name === 'showJobFitDashboard') {
-                     const analysisData = args as unknown as JobFitAnalysis;
-                     
-                     const aiText = `${analysisData.targetJob} 직무에 대한 분석 결과입니다.`;
-                     await persistMessage(aiText, 'ai', activeSessionId);
-                     
-                     addAiMessage(aiText, <JobFitAnalysisView data={analysisData} />);
-
-                     if (onJobFitAnalysis) {
-                         onJobFitAnalysis(analysisData);
-                     }
-
-                     const toolResult = await chatRef.current.sendMessage({
-                         message: [{ functionResponse: { name: 'showJobFitDashboard', id: call.id, response: { result: "Dashboard shown. Proceed to Deep Dive (Role 1)." } } }]
-                     });
-                     
-                     if (toolResult.text) {
-                         await persistMessage(toolResult.text, 'ai', activeSessionId);
-                     }
+                } catch (chatError) {
+                    console.warn("AI context update failed, forcing reset:", chatError);
+                    chatRef.current = null; // Reset session on error to self-heal
+                     setMessages(prev => [
+                        ...prev,
+                        { id: `sys-${Date.now()}`, text: resultMessage, sender: 'ai', component: <CheckIcon className="w-5 h-5 text-green-500" /> }
+                    ]);
                 }
-
-            } else {
-                if (responseText) {
-                    await persistMessage(responseText, 'ai', activeSessionId);
-                }
-            }
-
-        } catch (error: any) {
-            console.error("Chat Error:", error);
-            let errorMessage = "오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
-            addAiMessage(errorMessage);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-    
-    const handleSuggestionClick = (suggestion: string) => {
-        handleSendMessage(suggestion);
-    };
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.nativeEvent.isComposing) return;
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSendMessage();
-        }
-    };
-
-    const handleConfirmSave = useCallback(async (request: ConfirmationRequest) => {
-        setConfirmationRequest(null);
-        setIsLoading(true);
-
-        setMessages(prev => prev.map(m => m.component && (m.component as any).props.onConfirm.name === request.toolName ? { ...m, component: undefined } : m));
-        
-        const activeSessionId = sessionId || await ensureSession();
-        await persistMessage("네, 저장해주세요.", 'user', activeSessionId);
-
-        try {
-            if (request.toolName === 'saveFinalizedStory' && request.rawData) {
-                const data = request.rawData;
-                const starData = data.star_json || {};
-                
-                const baseExperience = experiences.find(exp => exp.activity_name === data.activity_name);
-                
-                const newStory: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'> = {
-                    activity_name: data.activity_name || "새로운 스토리",
-                    activity_date: baseExperience?.activity_date || new Date().toISOString().split('T')[0],
-                    activity_type: baseExperience?.activity_type || '스토리',
-                    type: 'story',
-                    story_title: data.story_title,
-                    story_summary: data.star_text_short, 
-                    situation: starData.situation,
-                    task: starData.task,
-                    action: starData.action,
-                    result_quantitative: starData.result,
-                    result_qualitative: `Learning: ${starData.learning}`, 
-                    learning: starData.learning,
-                    core_competency: Array.isArray(data.keywords) ? data.keywords.join(', ') : data.keywords,
-                    job_alignment: '미분류',
-                    what: baseExperience?.what || '', when: '', where: '', who: '', why: data.task, how: starData.action, result_achievement: starData.result, key_insight: starData.learning,
-                    detailed_content: data.star_text_long
-                };
-                
-                const newId = await onAddExperience(newStory);
-                if (newId) setLastSavedExperienceId(newId);
-
-                if (!chatRef.current) throw new Error("Chat not initialized");
-                
-                const result = await chatRef.current.sendMessage({
-                    message: [{ functionResponse: { name: 'saveFinalizedStory', id: request.id, response: { result: "Story saved. Proceed to ROLE 3: Automated Analysis." } } }]
-                });
-                
-                if (result.functionCalls && result.functionCalls.length > 0) {
-                     const call = result.functionCalls[0];
-                     if (call.name === 'saveExperienceAnalysis') {
-                         const { skills, jobs, nlpUnits } = call.args;
-                         if (newId) {
-                            onUpdateExperience(newId, { 
-                                skills: skills as string[], 
-                                jobs: jobs as string[], 
-                                nlpUnits: nlpUnits as any 
-                            });
-                         }
-                         await chatRef.current.sendMessage({
-                             message: [{ functionResponse: { name: 'saveExperienceAnalysis', id: call.id, response: { result: "Analysis saved." } } }]
-                         });
-                     }
-                }
-                if (result.text) {
-                    await persistMessage(result.text, 'ai', activeSessionId);
-                }
-
-            } else if (request.toolName === 'requestToSaveExperience' && request.rawData) {
-                 const data = request.rawData;
-                 const actionsStr = Array.isArray(data.actions) ? data.actions.join('\n') : data.actions;
-                 
-                 const structuredContent = `[Situation]\n${data.situation}\n\n[Task]\n${data.task}\n\n[Actions]\n${actionsStr}\n\n[Result]\n${data.result}\n\n[Learning]\n${data.learning}`;
-
-                 const newExperience: Omit<Experience, 'id' | 'sequence_number' | 'createdAt'> = {
-                    type: 'basic', 
-                    activity_date: data.period, 
-                    activity_type: data.category,
-                    activity_name: data.activity_name, 
-                    story_summary: data.result || "경험 추출 완료",
-                    result_achievement: data.result, 
-                    key_insight: data.learning,
-                    detailed_content: structuredContent,
-                    what: data.activity_name, when: data.period, where: '', who: '', why: data.task, how: actionsStr,
-                    story_title: '', core_competency: '', job_alignment: '', situation: '', task: '', action: '', result_quantitative: '', result_qualitative: '', learning: '',
-                };
-                await onAddExperience(newExperience);
-
-                 if (!chatRef.current) throw new Error("Chat not initialized");
-                 const result = await chatRef.current.sendMessage({
-                    message: [{ functionResponse: { name: 'requestToSaveExperience', id: request.id, response: { result: "Experience facts saved." } } }]
-                });
-                await persistMessage(result.text, 'ai', activeSessionId);
             }
 
         } catch (error) {
-            console.error("Save confirm error:", error);
-            addAiMessage("저장 중 오류가 발생했습니다.");
+            console.error("Tool execution failed:", error);
+            setMessages(prev => [...prev, { id: `err-${Date.now()}`, text: "작업 처리 중 오류가 발생했습니다.", sender: 'ai' }]);
+            chatRef.current = null; // Reset session
         } finally {
-            setIsLoading(false);
+            setIsToolProcessing(false); 
+            setConfirmationRequest(null);
+            setStoryLinkingRequest(null);
         }
-    }, [experiences, sessionId, user.uid, onAddExperience, onUpdateExperience, ensureSession]);
+    };
 
-    const handleCancelSave = useCallback(async (request: ConfirmationRequest) => {
-        setConfirmationRequest(null);
-        setIsLoading(true);
+    const handleSendMessage = async (text: string, attachment?: { file: File, base64: string, mimeType: string }) => {
+        if ((!text.trim() && !attachment) || !user) return;
 
-        setMessages(prev => prev.map(m => m.component && (m.component as any).props.onConfirm.name === request.toolName ? { ...m, component: undefined } : m));
-        
-        const activeSessionId = sessionId || await ensureSession();
-        await persistMessage("아니요, 수정할게요.", 'user', activeSessionId);
+        // Robust Session Reset on Tool Interruption
+        if (confirmationRequest) {
+            setConfirmationRequest(null);
+            chatRef.current = null; 
+        }
+
+        const newUserMsg: ChatMessage = {
+            id: `user-${Date.now()}`,
+            text: text,
+            sender: 'user',
+            createdAt: new Date().toISOString()
+        };
+
+        setMessages(prev => [...prev, newUserMsg]);
+        setInput('');
+        setPendingAttachment(null);
+        setLoading(true);
+        setShowOptions(null);
+
+        if (sessionId) {
+            try {
+                await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                    text: text,
+                    sender: 'user',
+                    createdAt: new Date().toISOString()
+                });
+            } catch (e) {
+                console.error("Failed to save user message", e);
+            }
+        }
 
         try {
-            if (!chatRef.current) throw new Error("Chat not initialized");
+            if (!chatRef.current) {
+                initializeChat();
+            }
+
+            const parts: (string | { inlineData: { mimeType: string; data: string } } | { text: string })[] = [{ text }];
             
-            const result = await chatRef.current.sendMessage({
-                 message: [{ functionResponse: { name: request.toolName, id: request.id, response: { result: "User cancelled save. Ask for corrections." } } }]
-            });
-            await persistMessage(result.text, 'ai', activeSessionId);
-        } catch(e) {
-            console.error(e);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [sessionId, ensureSession]);
+            if (attachment) {
+                parts.push({
+                    inlineData: {
+                        mimeType: attachment.mimeType,
+                        data: attachment.base64
+                    }
+                });
+            }
 
-    if (viewMode === 'landing') {
-        return (
-            <div className="flex flex-col h-full items-center justify-center p-8 bg-slate-50 animate-fade-in text-center relative overflow-hidden">
-                <div className="absolute inset-0 bg-gradient-to-br from-indigo-50 to-white z-0"></div>
+            const result = await chatRef.current!.sendMessage({ message: parts });
+            const response = result;
+            const textResponse = response.text;
+            
+            const functionCalls = response.functionCalls;
+            
+            if (functionCalls && functionCalls.length > 0) {
+                const toolCall = functionCalls[0];
+                const toolName = toolCall.name;
+                const args = toolCall.args;
+
+                if (toolName === 'retrieveDetailedExperience') {
+                    const query = (args as any).query.toLowerCase();
+                    const found = experiences.filter(e => 
+                        e.activity_name?.toLowerCase().includes(query) || 
+                        e.detailed_content?.toLowerCase().includes(query)
+                    ).slice(0, 3);
+                    
+                    const searchResult = { 
+                        found_count: found.length,
+                        results: found.map(e => ({ id: e.id, name: e.activity_name, content: e.detailed_content?.substring(0, 100) }))
+                    };
+
+                    const nextResp = await chatRef.current!.sendMessage({
+                        message: [{
+                            functionResponse: {
+                                name: toolName,
+                                response: searchResult
+                            }
+                        }]
+                    });
+                    
+                    const nextText = nextResp.text;
+                    setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: nextText, sender: 'ai' }]);
+                    
+                    if (sessionId && nextText) {
+                        await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                            text: nextText,
+                            sender: 'ai',
+                            createdAt: new Date().toISOString()
+                        });
+                    }
                 
-                <div className="relative z-10 max-w-lg">
-                    <div className="w-20 h-20 bg-white rounded-3xl shadow-xl flex items-center justify-center mx-auto mb-8 transform rotate-3 hover:rotate-6 transition-transform duration-300">
-                        <span className="text-4xl">🚀</span>
-                    </div>
+                } else if (toolName === 'offerConversationOptions') {
+                    setShowOptions(args as any);
+                    if (textResponse) {
+                        setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: textResponse, sender: 'ai' }]);
+                        if (sessionId) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: textResponse,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
+                    }
+                
+                } else if (toolName === 'saveExperienceShell' || toolName === 'completeOnboardingCollection') {
                     
-                    <h1 className="text-3xl font-bold text-slate-800 mb-4 tracking-tight">
-                        안녕하세요, <span className="text-indigo-600">{userProfile?.name || '사용자'}</span>님!
-                    </h1>
-                    
-                    <p className="text-slate-600 text-lg mb-10 leading-relaxed">
-                        오늘은 어떤 이야기를 나눠볼까요?<br />
-                        작은 경험도 모이면 훌륭한 커리어가 됩니다.
-                    </p>
+                    if (toolName === 'saveExperienceShell') {
+                        const finalData = args as any;
+                        await onAddExperience({
+                            ...emptyExperienceFields,
+                            activity_name: finalData.activity_name,
+                            activity_type: finalData.activity_type,
+                            activity_date: finalData.activity_date,
+                            type: 'basic',
+                            detailed_content: ''
+                        });
+                        
+                        let nextText = "";
+                        try {
+                            const nextResp = await chatRef.current!.sendMessage({
+                                message: [{
+                                    functionResponse: {
+                                        name: toolName,
+                                        response: { 
+                                            result: "success", 
+                                            saved_item: finalData.activity_name,
+                                            system_note: "Saved successfully. NOW ASK FOR THE NEXT CATEGORY immediately." 
+                                        }
+                                    }
+                                }]
+                            });
+                            nextText = nextResp.text || ""; // Ensure it's string
+                        } catch (toolError) {
+                            console.error("Failed to get AI response after save:", toolError);
+                            // Fallback triggers below if nextText is empty
+                            chatRef.current = null; 
+                        }
+                        
+                        // FALLBACK IF AI RETURNS EMPTY TEXT OR ERROR
+                        if (!nextText || nextText.trim() === '') {
+                            // Use ALLOWED_CATEGORIES to determine next step dynamically
+                            const currentCat = finalData.activity_type;
+                            const idx = ALLOWED_CATEGORIES.indexOf(currentCat);
+                            const nextCat = idx >= 0 && idx < ALLOWED_CATEGORIES.length - 1 
+                                ? ALLOWED_CATEGORIES[idx + 1] 
+                                : '기타';
+                            
+                            // Specific message if we just finished 'Other' (last item)
+                            if (idx === ALLOWED_CATEGORIES.length - 1 || currentCat === '기타') {
+                                nextText = "모든 항목을 확인했어! 수고했어. 이제 완료 처리를 할게.";
+                            } else {
+                                nextText = `오케이 저장했어! 📂\n다음으로 **${nextCat}** 경험은 있어?`;
+                            }
+                        }
+                        
+                        setMessages(prev => [
+                            ...prev, 
+                            { id: `sys-${Date.now()}`, text: `✅ 저장됨: ${finalData.activity_name} (${finalData.activity_date || '날짜 미상'})`, sender: 'ai', component: <CheckIcon className="w-4 h-4 text-green-500" /> },
+                            { id: `ai-${Date.now()+1}`, text: nextText, sender: 'ai' }
+                        ]);
 
-                    <button 
-                        onClick={() => setViewMode('chat')}
-                        className="px-8 py-4 bg-indigo-600 text-white text-lg font-bold rounded-full shadow-lg hover:bg-indigo-700 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex items-center gap-3 mx-auto"
-                    >
-                        <span>대화 시작하기</span>
-                        <ArrowLeftIcon className="w-5 h-5 rotate-180" />
-                    </button>
-                    
-                    <div className="mt-12 grid grid-cols-2 gap-4 text-left">
-                        <div className="bg-white/60 p-4 rounded-2xl border border-indigo-50 backdrop-blur-sm">
-                            <span className="text-2xl mb-2 block">📝</span>
-                            <h3 className="font-bold text-slate-700">기록하기</h3>
-                            <p className="text-xs text-slate-500">오늘의 활동과 배운 점을<br/>가볍게 남겨보세요.</p>
-                        </div>
-                        <div className="bg-white/60 p-4 rounded-2xl border border-indigo-50 backdrop-blur-sm">
-                            <span className="text-2xl mb-2 block">💎</span>
-                            <h3 className="font-bold text-slate-700">발견하기</h3>
-                            <p className="text-xs text-slate-500">대화 속에서 나의 강점과<br/>핵심 역량을 찾아드려요.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        );
-    }
+                        if (sessionId) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: nextText,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
 
+                    } else if (toolName === 'completeOnboardingCollection') {
+                        const userDocRef = doc(db, 'users', user.uid);
+                        await setDoc(userDocRef, { isOnboardingFinished: true }, { merge: true });
+                        
+                        let nextText = "";
+                        try {
+                            const nextResp = await chatRef.current!.sendMessage({
+                                message: [{
+                                    functionResponse: {
+                                        name: toolName,
+                                        response: { result: "success" }
+                                    }
+                                }]
+                            });
+                            nextText = nextResp.text || "";
+                        } catch (e) {
+                            nextText = "모든 기초 데이터 수집이 완료되었습니다! 고생 많으셨어요. 🎉 이제 본격적으로 경험을 정리해보거나 대화를 나눠봐요.";
+                        }
+
+                        if (!nextText) nextText = "모든 기초 데이터 수집이 완료되었습니다! 고생 많으셨어요. 🎉";
+
+                        setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: nextText, sender: 'ai' }]);
+                        
+                        if (sessionId && nextText) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: nextText,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
+                    }
+
+                } else if (toolName === 'manageCalendarEvents') {
+                    const op = (args as any).operation;
+                    const evts = Array.isArray((args as any).events) ? (args as any).events : [(args as any).events];
+                    const firstEvent = evts[0];
+                    let summary = "일정 관리 작업을 수행합니다.";
+                    if (op === 'ADD' && firstEvent) {
+                        summary = `📅 캘린더 등록: ${firstEvent.date} ${firstEvent.title}`;
+                    } else if (op === 'UPDATE') {
+                        summary = `📅 캘린더 수정: ${firstEvent?.title || '일정'}`;
+                    } else if (op === 'DELETE') {
+                        summary = `🗑️ 캘린더 삭제: ${firstEvent?.title || '일정'}`;
+                    }
+
+                    setConfirmationRequest({
+                        id: `confirm-${Date.now()}`,
+                        summary: summary,
+                        toolName: toolName,
+                        rawData: args,
+                        otherResponses: functionCalls.slice(1).map(fc => ({ name: fc.name, response: { result: "skipped" } }))
+                    });
+                    if (textResponse) {
+                        setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: textResponse, sender: 'ai' }]);
+                        if (sessionId) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: textResponse,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
+                    }
+
+                } else {
+                    setConfirmationRequest({
+                        id: `confirm-${Date.now()}`,
+                        summary: "AI가 작업을 수행하려고 합니다.",
+                        toolName: toolName,
+                        rawData: args,
+                        otherResponses: functionCalls.slice(1).map(fc => ({ name: fc.name, response: { result: "skipped" } }))
+                    });
+                    if (textResponse) {
+                        setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: textResponse, sender: 'ai' }]);
+                        if (sessionId) {
+                            await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                                text: textResponse,
+                                sender: 'ai',
+                                createdAt: new Date().toISOString()
+                            });
+                        }
+                    }
+                }
+            } else {
+                setMessages(prev => [...prev, { id: `ai-${Date.now()}`, text: textResponse, sender: 'ai' }]);
+                if (sessionId && textResponse) {
+                    await addDoc(collection(db, 'users', user.uid, 'chatSessions', sessionId, 'messages'), {
+                        text: textResponse,
+                        sender: 'ai',
+                        createdAt: new Date().toISOString()
+                    });
+                }
+            }
+
+            if (isOnboarding) return;
+            const today = new Date().toISOString().split('T')[0];
+            if (userProfile?.lastChatDate !== today) {
+                onEarnPoints('DAILY_CHAT');
+            }
+
+        } catch (error) {
+            console.error("Chat Error:", error);
+            setMessages(prev => [...prev, { id: `err-${Date.now()}`, text: "죄송해요, 오류가 발생했습니다. 잠시 후 다시 시도해주세요.", sender: 'ai' }]);
+            chatRef.current = null; // Force reset session to recover from error state
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            try {
+                const base64 = await readFileAsBase64(file);
+                setPendingAttachment({
+                    file,
+                    base64,
+                    mimeType: file.type
+                });
+            } catch (error) {
+                console.error("File reading failed", error);
+                alert("파일을 읽는 중 오류가 발생했습니다.");
+            }
+        }
+    };
+
+    const handleOptionClick = (option: string) => {
+        handleSendMessage(option);
+    };
+
+    // --- Render ---
     return (
         <div className="flex flex-col h-full bg-slate-50 relative">
-            <VoiceCallOverlay 
-                isOpen={isVoiceCallOpen} 
-                onClose={stopVoiceSession} 
-                status={voiceCallStatus}
-                transcript={voiceTranscript}
-            />
+            {/* Live Voice Mode Overlay */}
+            {isVoiceMode && (
+                <LiveVoiceMode 
+                    onClose={() => setIsVoiceMode(false)}
+                    userProfile={userProfile}
+                />
+            )}
 
-            <div 
-                ref={chatMessagesRef}
-                className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth pb-32"
-            >
-                {messages.map((msg) => (
-                    msg.sender === 'ai' ? 
-                        <AiMessage key={msg.id} msg={msg} /> : 
-                        <UserMessage key={msg.id} text={msg.text} />
-                ))}
-                {isLoading && (
-                    <div className="flex items-center gap-2 text-slate-400 text-sm animate-pulse ml-14">
-                        <LoadingSpinner isWhite={false} />
-                        <span>생각하는 중...</span>
+            {/* Messages Area */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-32 scroll-smooth">
+                {messages.length === 0 && (
+                    <div className="text-center text-slate-400 mt-20">
+                        <p>대화를 시작해보세요!</p>
                     </div>
                 )}
+                
+                {messages.map((msg) => (
+                    <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`
+                            max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed shadow-sm
+                            ${msg.sender === 'user' 
+                                ? 'bg-indigo-600 text-white rounded-tr-none' 
+                                : 'bg-white text-slate-800 border border-slate-200 rounded-tl-none'}
+                        `}>
+                            <div className="whitespace-pre-wrap">{cleanDisplayText(msg.text)}</div>
+                            {msg.component && <div className="mt-2">{msg.component}</div>}
+                        </div>
+                    </div>
+                ))}
+                
+                {/* Options (Chips) */}
+                {showOptions && !loading && (
+                    <div className="flex flex-wrap gap-2 justify-start ml-2 animate-fade-in-up">
+                        {showOptions.options.map((opt, i) => (
+                            <button
+                                key={i}
+                                onClick={() => handleOptionClick(opt)}
+                                className="px-4 py-2 bg-white border border-indigo-200 text-indigo-600 rounded-full text-sm font-medium hover:bg-indigo-50 transition-colors shadow-sm"
+                            >
+                                {opt}
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                {loading && (
+                    <div className="flex justify-start">
+                        <div className="bg-white p-4 rounded-2xl rounded-tl-none border border-slate-200 shadow-sm">
+                            <LoadingSpinner isWhite={false} />
+                        </div>
+                    </div>
+                )}
+                
+                {/* Confirmation Card (Tool Call) */}
+                {confirmationRequest && (
+                    <div className="flex justify-start w-full animate-slide-in-up">
+                        <div className="bg-white rounded-xl border-l-4 border-indigo-500 shadow-md p-4 w-full max-w-sm ml-2">
+                            <h4 className="font-bold text-slate-800 mb-1">
+                                {confirmationRequest.toolName === 'saveFinalizedStory' ? '스토리 저장' : 
+                                 confirmationRequest.toolName === 'saveExperienceShell' ? '경험 기본 정보 저장' : 
+                                 confirmationRequest.toolName === 'manageCalendarEvents' ? '캘린더 작업' : '확인 필요'}
+                            </h4>
+                            <p className="text-sm text-slate-600 mb-3">{confirmationRequest.summary}</p>
+                            <div className="flex gap-2 justify-end">
+                                <button 
+                                    onClick={() => setConfirmationRequest(null)}
+                                    disabled={isToolProcessing}
+                                    className="px-3 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-100 rounded disabled:opacity-50"
+                                >
+                                    취소
+                                </button>
+                                <button 
+                                    onClick={handleConfirmTool}
+                                    disabled={isToolProcessing}
+                                    className={`px-4 py-1.5 text-xs font-bold text-white rounded shadow-sm flex items-center gap-2 ${
+                                        isToolProcessing ? 'bg-indigo-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'
+                                    }`}
+                                >
+                                    {isToolProcessing ? <><LoadingSpinner isWhite={true} /> 처리 중...</> : '실행 (Yes)'}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                <div ref={messagesEndRef} />
             </div>
 
-            <QuickSuggestions />
+            {/* Input Area */}
+            <div className="p-4 bg-white border-t border-slate-200 sticky bottom-0 z-20">
+                {messages.length < 2 && (
+                    <div className="flex gap-2 overflow-x-auto pb-3 no-scrollbar">
+                        {QUICK_SUGGESTIONS.map((s, i) => (
+                            <button 
+                                key={i} 
+                                onClick={() => handleSendMessage(s)}
+                                className="whitespace-nowrap px-3 py-1.5 bg-slate-100 text-slate-600 rounded-full text-xs font-medium hover:bg-slate-200 transition-colors"
+                            >
+                                {s}
+                            </button>
+                        ))}
+                    </div>
+                )}
 
-            <div className="p-4 bg-white/80 backdrop-blur-md border-t border-slate-200 z-20">
-                <div className="max-w-4xl mx-auto flex items-end gap-3 relative">
-                    {/* File Attachment Button */}
-                    <div className="relative">
-                        <input
-                            type="file"
-                            multiple
-                            ref={fileInputRef}
-                            className="hidden"
-                            onChange={(e) => {
-                                if (e.target.files) {
-                                    setAttachedFiles(prev => [...prev, ...Array.from(e.target.files!)]);
-                                }
-                            }}
-                        />
-                         <button 
-                            onClick={() => fileInputRef.current?.click()}
-                            className="p-3 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50 rounded-full transition-colors relative"
-                            title="파일 첨부"
-                        >
-                            <PaperclipIcon className="w-6 h-6" />
-                            {attachedFiles.length > 0 && (
-                                <span className="absolute top-1 right-1 w-3 h-3 bg-indigo-500 rounded-full border-2 border-white"></span>
-                            )}
+                {pendingAttachment && (
+                    <div className="flex items-center gap-2 mb-2 p-2 bg-indigo-50 rounded-lg max-w-fit">
+                        <span className="text-xs text-indigo-700 font-bold truncate max-w-[200px]">
+                            {pendingAttachment.file.name}
+                        </span>
+                        <button onClick={() => setPendingAttachment(null)} className="text-indigo-400 hover:text-indigo-600">
+                            <XCircleIcon className="w-4 h-4" />
                         </button>
                     </div>
+                )}
 
-                    {/* Chat Input Area */}
-                    <div className="flex-1 bg-slate-100 rounded-2xl border border-slate-200 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100 transition-all flex flex-col">
-                         {/* Attachments Preview */}
-                        {(attachedFiles.length > 0 || attachedUrl) && (
-                            <div className="flex gap-2 p-2 border-b border-slate-200/50 overflow-x-auto">
-                                {attachedFiles.map((file, i) => (
-                                    <div key={i} className="flex items-center gap-1 bg-white px-2 py-1 rounded-md text-xs border border-slate-200 text-slate-600 shadow-sm whitespace-nowrap">
-                                        <span className="max-w-[100px] truncate">{file.name}</span>
-                                        <button onClick={() => setAttachedFiles(prev => prev.filter((_, idx) => idx !== i))} className="hover:text-red-500"><XCircleIcon className="w-3 h-3"/></button>
-                                    </div>
-                                ))}
-                                {attachedUrl && (
-                                     <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-md text-xs border border-slate-200 text-slate-600 shadow-sm whitespace-nowrap">
-                                        <span className="max-w-[100px] truncate">LINK</span>
-                                        <button onClick={() => setAttachedUrl('')} className="hover:text-red-500"><XCircleIcon className="w-3 h-3"/></button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                        
-                        <textarea
-                            ref={textareaRef}
-                            value={inputValue}
-                            onChange={(e) => setInputValue(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            placeholder="오늘 어떤 활동을 하셨나요?"
-                            className="w-full bg-transparent border-none focus:ring-0 p-3 max-h-32 resize-none text-slate-800 placeholder:text-slate-400 leading-relaxed"
-                            rows={1}
-                        />
-                    </div>
-
-                    {/* Voice Mode Button (Live API) */}
-                    <button
-                        onClick={startVoiceSession}
-                        className="p-3 bg-indigo-50 text-indigo-500 hover:bg-indigo-100 rounded-full transition-colors shadow-sm"
-                        title="전화 모드 (Live)"
+                <div className="flex items-end gap-2 bg-slate-100 p-2 rounded-2xl border border-slate-200 focus-within:border-indigo-300 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+                    <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="p-2 text-slate-400 hover:text-indigo-500 transition-colors"
                     >
-                        <PhoneIcon className="w-6 h-6" />
+                        <PaperclipIcon className="w-5 h-5" />
+                    </button>
+                    <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        onChange={handleFileSelect}
+                        accept={SUPPORTED_INLINE_MIME_TYPES.join(',')}
+                    />
+                    
+                    <textarea
+                        ref={textareaRef}
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.nativeEvent.isComposing) return;
+                            
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendMessage(input, pendingAttachment || undefined);
+                            }
+                        }}
+                        placeholder="메시지를 입력하세요..."
+                        className="flex-1 bg-transparent border-none focus:ring-0 text-slate-800 placeholder-slate-400 resize-none py-2.5 max-h-32 text-sm"
+                        rows={1}
+                    />
+                    
+                    <button
+                        onClick={() => setIsVoiceMode(true)}
+                        className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                        title="음성 대화 (Live)"
+                    >
+                        <MicrophoneIcon className="w-5 h-5" />
                     </button>
 
-                     {/* Dictation Button */}
-                    <button
-                        onClick={handleToggleListen}
-                         className={`p-3 rounded-full transition-all ${
-                            isListeningForText 
-                                ? 'bg-red-500 text-white animate-pulse shadow-lg ring-4 ring-red-200' 
-                                : 'bg-slate-100 text-slate-400 hover:text-indigo-500 hover:bg-indigo-50'
-                        }`}
-                        title="음성 받아쓰기"
+                    <button 
+                        onClick={() => handleSendMessage(input, pendingAttachment || undefined)}
+                        disabled={!input.trim() && !pendingAttachment}
+                        className="p-2 bg-indigo-500 text-white rounded-xl shadow-sm hover:bg-indigo-600 disabled:opacity-50 disabled:shadow-none transition-all transform active:scale-95"
                     >
-                        <MicrophoneIcon className="w-6 h-6" />
-                    </button>
-
-                    {/* Send Button */}
-                    <button
-                        onClick={() => handleSendMessage()}
-                        disabled={!inputValue.trim() && attachedFiles.length === 0 && !attachedUrl || isLoading}
-                        className="p-3 bg-indigo-600 text-white rounded-full shadow-lg hover:bg-indigo-700 disabled:bg-slate-300 disabled:shadow-none transition-all hover:-translate-y-1 active:translate-y-0"
-                    >
-                        {isLoading ? <LoadingSpinner /> : <PaperAirplaneIcon className="w-5 h-5" />}
+                        <PaperAirplaneIcon className="w-5 h-5" />
                     </button>
                 </div>
             </div>

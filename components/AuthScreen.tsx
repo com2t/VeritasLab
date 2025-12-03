@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { auth, createUserWithEmailAndPassword, signInWithEmailAndPassword, setDoc, doc, db, updateProfile, sendPasswordResetEmail } from '../firebase';
 import { UserProfile } from '../types';
@@ -25,28 +26,37 @@ const AuthScreen: React.FC = () => {
     const renderContent = () => {
         if (isResetView) {
             return (
-                <>
+                <div className="w-full">
                     <div className="text-center mb-8">
-                        <div className="w-12 h-12 mx-auto bg-indigo-100 rounded-full flex items-center justify-center mb-4 text-indigo-500">
-                            <LockClosedIcon className="w-6 h-6" />
+                        <div className="w-16 h-16 mx-auto bg-indigo-50 rounded-2xl flex items-center justify-center mb-4 text-indigo-600 shadow-sm border border-indigo-100">
+                            <LockClosedIcon className="w-8 h-8" />
                         </div>
-                        <h1 className="text-3xl font-bold text-gray-800 mb-2">비밀번호 재설정</h1>
-                        <p className="text-gray-500">
+                        <h1 className="text-2xl font-extrabold text-slate-900 mb-2">비밀번호 재설정</h1>
+                        <p className="text-slate-500 text-sm leading-relaxed">
                             가입하신 전화번호를 입력하시면<br/>재설정 링크를 이메일로 보내드립니다.
                         </p>
                     </div>
                     <ResetPasswordForm onBack={() => setIsResetView(false)} />
-                </>
+                </div>
             );
         }
 
         return (
-            <>
+            <div className="w-full">
                 <div className="text-center mb-8">
-                    <SparklesIcon className="w-12 h-12 mx-auto text-indigo-500 mb-4" />
-                    <h1 className="text-3xl font-bold text-gray-800 mb-2">경험 스택</h1>
-                    <p className="text-gray-500">
-                        {isLoginView ? 'AI 코치와 함께 당신의 경험을 자산으로 만드세요.' : '몇 가지 정보만 입력하면 바로 시작할 수 있어요.'}
+                    <div className="flex justify-center mb-6">
+                        <div className="relative group cursor-default">
+                            {/* Decorative Background for Logo */}
+                            <div className="absolute inset-0 bg-indigo-200 rounded-2xl rotate-6 scale-105 opacity-40 group-hover:rotate-12 transition-transform duration-500"></div>
+                            <div className="relative bg-white p-4 rounded-2xl shadow-sm border border-indigo-50">
+                                <SparklesIcon className="w-8 h-8 text-indigo-600" />
+                            </div>
+                        </div>
+                    </div>
+                    {/* Corrected App Name */}
+                    <h1 className="text-3xl font-extrabold text-slate-900 mb-3 tracking-tight">경험 스택</h1>
+                    <p className="text-slate-500 text-sm font-medium leading-relaxed break-keep max-w-xs mx-auto">
+                        AI 담당자와 함께 귀하의 경험을 소중하게 만드십시오.
                     </p>
                 </div>
                 
@@ -56,19 +66,24 @@ const AuthScreen: React.FC = () => {
                     <SignupForm />
                 )}
 
-                <div className="mt-6 text-center">
-                    <button onClick={() => setIsLoginView(!isLoginView)} className="text-sm font-semibold text-indigo-500 hover:text-indigo-700">
-                        {isLoginView ? '계정이 없으신가요? 회원가입' : '이미 계정이 있으신가요? 로그인'}
+                <div className="mt-8 pt-6 border-t border-slate-50 text-center">
+                    <button 
+                        onClick={() => setIsLoginView(!isLoginView)} 
+                        className="text-sm font-bold text-indigo-600 hover:text-indigo-800 transition-colors py-2 px-4 rounded-lg hover:bg-indigo-50"
+                    >
+                        {isLoginView ? '계정이 없으신가요? 회원가입' : '계정이 있으신가요? 로그인'}
                     </button>
                 </div>
-            </>
+            </div>
         );
     };
 
     return (
-        <div className="h-screen w-screen bg-slate-50 flex items-center justify-center p-4 font-sans">
-            <div className="w-full max-w-md bg-white p-8 sm:p-10 rounded-2xl shadow-2xl animate-fade-in-up transition-all duration-300">
-                {renderContent()}
+        <div className="fixed inset-0 z-50 bg-slate-100 overflow-y-auto font-sans">
+            <div className="min-h-full flex items-center justify-center p-4 py-12">
+                <div className="w-full max-w-[400px] bg-white p-8 sm:p-10 rounded-3xl shadow-2xl border border-white/50 animate-fade-in-up transition-all duration-300">
+                    {renderContent()}
+                </div>
             </div>
         </div>
     );
@@ -76,43 +91,24 @@ const AuthScreen: React.FC = () => {
 
 const InputField: React.FC<{ id: string, type: string, placeholder: string, value: string, onChange: (e: React.ChangeEvent<HTMLInputElement>) => void, icon: React.ReactNode, required?: boolean, onToggleVisibility?: () => void, showPassword?: boolean }> = 
 ({ id, type, placeholder, value, onChange, icon, required = true, onToggleVisibility, showPassword }) => {
-    const isDateInput = type === 'date';
-
-    // For date inputs, we want to show a placeholder. The standard way to do this is
-    // to render it as a 'text' input when empty, and switch to 'date' on focus or when it has a value.
-    const displayType = isDateInput && !value ? 'text' : type;
-
-    const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-        if (isDateInput) {
-            e.target.type = 'date';
-        }
-    };
-
-    const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-        if (isDateInput && !e.target.value) {
-            e.target.type = 'text';
-        }
-    };
     
     return (
-        <div className="relative">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+        <div className="relative group">
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors">
                 {icon}
             </span>
             <input
                 id={id}
                 name={id}
-                type={displayType}
+                type={type}
                 value={value}
                 onChange={onChange}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
                 placeholder={placeholder}
                 required={required}
-                className="w-full pl-12 pr-4 py-3 border-2 border-slate-200 rounded-lg focus:outline-none focus:border-indigo-400 bg-slate-50 text-slate-900"
+                className="w-full pl-12 pr-4 py-3.5 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 bg-white text-slate-800 text-sm font-semibold placeholder-slate-400 transition-all shadow-sm hover:border-slate-300"
             />
             {onToggleVisibility && (
-                 <button type="button" onClick={onToggleVisibility} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700">
+                 <button type="button" onClick={onToggleVisibility} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1">
                     {showPassword ? <EyeSlashIcon className="w-5 h-5"/> : <EyeIcon className="w-5 h-5"/>}
                 </button>
             )}
@@ -140,28 +136,32 @@ const LoginForm: React.FC<LoginFormProps> = ({ onForgotPassword }) => {
             await signInWithEmailAndPassword(auth, email, password);
         } catch (err) {
             const error = err as any;
-            if (error.code) {
-                switch (error.code) {
-                    case 'auth/user-not-found':
-                    case 'auth/wrong-password':
-                    case 'auth/invalid-credential':
-                        setError('전화번호 또는 비밀번호가 올바르지 않습니다.');
-                        break;
-                    default:
-                        setError('로그인 중 오류가 발생했습니다. 다시 시도해주세요.');
-                        break;
-                }
+            console.error("Login Error:", error);
+            
+            const errorCode = error.code;
+            const errorMessage = error.message || '';
+            
+            if (
+                errorCode === 'auth/user-not-found' || 
+                errorCode === 'auth/wrong-password' || 
+                errorCode === 'auth/invalid-credential' ||
+                errorCode === 'auth/invalid-login-credentials' ||
+                errorMessage.includes('invalid-credential') ||
+                errorMessage.includes('INVALID_LOGIN_CREDENTIALS')
+            ) {
+                setError('전화번호 또는 비밀번호가 올바르지 않습니다.');
+            } else if (errorCode === 'auth/too-many-requests') {
+                 setError('로그인 시도가 너무 많습니다. 잠시 후 다시 시도해주세요.');
             } else {
-                setError('알 수 없는 오류가 발생했습니다.');
+                setError('로그인 중 오류가 발생했습니다. 다시 시도해주세요.');
             }
-            console.error(err);
         } finally {
             setIsLoading(false);
         }
     };
     
     return (
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form onSubmit={handleLogin} className="space-y-5">
              <InputField 
                 id="phoneNumber"
                 type="tel"
@@ -174,7 +174,7 @@ const LoginForm: React.FC<LoginFormProps> = ({ onForgotPassword }) => {
                 <InputField 
                     id="password"
                     type={showPassword ? 'text' : 'password'}
-                    placeholder="비밀번호"
+                    placeholder="비밀번호" 
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     icon={<LockClosedIcon className="w-5 h-5" />}
@@ -185,14 +185,14 @@ const LoginForm: React.FC<LoginFormProps> = ({ onForgotPassword }) => {
                     <button 
                         type="button"
                         onClick={onForgotPassword}
-                        className="text-xs text-indigo-500 hover:text-indigo-700 font-medium"
+                        className="text-xs text-indigo-600 hover:text-indigo-800 font-bold transition-colors py-1"
                     >
                         비밀번호를 잊으셨나요?
                     </button>
                 </div>
             </div>
-            {error && <p className="text-sm text-red-500 text-center">{error}</p>}
-            <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-3 px-4 bg-indigo-500 text-white rounded-lg font-semibold hover:bg-indigo-600 transition-colors disabled:bg-indigo-300">
+            {error && <p className="text-xs text-red-500 text-center font-bold bg-red-50 py-2.5 rounded-xl border border-red-100">{error}</p>}
+            <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-4 px-4 bg-indigo-600 text-white rounded-xl font-bold text-base hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl disabled:bg-indigo-300 disabled:shadow-none transform active:scale-[0.98]">
                 {isLoading ? <LoadingSpinner /> : '로그인'}
             </button>
         </form>
@@ -218,7 +218,7 @@ const ResetPasswordForm: React.FC<ResetPasswordFormProps> = ({ onBack }) => {
             await sendPasswordResetEmail(auth, email);
             setMessage({
                 type: 'success',
-                text: '비밀번호 재설정 링크가 전송되었습니다. (실제 이메일이 유효하지 않은 경우 링크를 받을 수 없습니다.)'
+                text: '비밀번호 재설정 링크가 전송되었습니다. (유효한 계정인 경우)'
             });
         } catch (err) {
             const error = err as any;
@@ -242,12 +242,12 @@ const ResetPasswordForm: React.FC<ResetPasswordFormProps> = ({ onBack }) => {
         <div className="space-y-6">
             {message && message.type === 'success' ? (
                 <div className="text-center space-y-6 animate-fade-in">
-                    <div className="bg-green-50 text-green-700 p-4 rounded-lg text-sm">
+                    <div className="bg-green-50 text-green-700 p-4 rounded-xl text-sm font-bold border border-green-100 shadow-sm">
                         {message.text}
                     </div>
                     <button 
                         onClick={onBack}
-                        className="w-full py-3 px-4 bg-slate-800 text-white rounded-lg font-semibold hover:bg-slate-900 transition-colors"
+                        className="w-full py-4 px-4 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition-colors shadow-lg"
                     >
                         로그인으로 돌아가기
                     </button>
@@ -257,24 +257,24 @@ const ResetPasswordForm: React.FC<ResetPasswordFormProps> = ({ onBack }) => {
                     <InputField 
                         id="resetPhoneNumber"
                         type="tel"
-                        placeholder="전화번호"
+                        placeholder="가입된 전화번호"
                         value={phoneNumber}
                         onChange={(e) => setPhoneNumber(formatPhoneNumber(e.target.value))}
                         icon={<DevicePhoneMobileIcon className="w-5 h-5" />}
                     />
                     
                     {message && message.type === 'error' && (
-                        <p className="text-sm text-red-500 text-center">{message.text}</p>
+                        <p className="text-xs text-red-500 text-center font-bold bg-red-50 py-2.5 rounded-xl border border-red-100">{message.text}</p>
                     )}
 
-                    <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-3 px-4 bg-indigo-500 text-white rounded-lg font-semibold hover:bg-indigo-600 transition-colors disabled:bg-indigo-300">
+                    <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-4 px-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg disabled:bg-indigo-300 transform active:scale-[0.98]">
                         {isLoading ? <LoadingSpinner /> : '재설정 링크 보내기'}
                     </button>
 
                     <button 
                         type="button"
                         onClick={onBack}
-                        className="w-full flex items-center justify-center py-3 px-4 bg-white text-slate-600 border-2 border-slate-200 rounded-lg font-semibold hover:bg-slate-50 transition-colors"
+                        className="w-full flex items-center justify-center py-4 px-4 bg-white text-slate-600 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-colors"
                     >
                         취소
                     </button>
@@ -285,8 +285,8 @@ const ResetPasswordForm: React.FC<ResetPasswordFormProps> = ({ onBack }) => {
 };
 
 const PasswordRequirement: React.FC<{ label: string, satisfied: boolean }> = ({ label, satisfied }) => (
-    <div className={`flex items-center gap-2 text-xs transition-colors ${satisfied ? 'text-emerald-500' : 'text-slate-500'}`}>
-        <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+    <div className={`flex items-center gap-1.5 text-[11px] transition-colors ${satisfied ? 'text-emerald-600 font-bold' : 'text-slate-400 font-medium'}`}>
+        <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d={satisfied ? "M4.5 12.75l6 6 9-13.5" : "M6 18L18 6M6 6l12 12"} />
         </svg>
         <span>{label}</span>
@@ -296,12 +296,12 @@ const PasswordRequirement: React.FC<{ label: string, satisfied: boolean }> = ({ 
 const PasswordStrengthMeter: React.FC<{ password: string }> = ({ password }) => {
     const checks = [
         { label: '8자 이상', satisfied: password.length >= 8 },
-        { label: '영문자 포함', satisfied: /[a-zA-Z]/.test(password) },
-        { label: '특수기호 포함', satisfied: /[^a-zA-Z0-9]/.test(password) },
+        { label: '영문', satisfied: /[a-zA-Z]/.test(password) },
+        { label: '특수문자', satisfied: /[^a-zA-Z0-9]/.test(password) },
     ];
 
     return (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-1 -mt-2 mb-2 px-1">
+        <div className="flex gap-3 mt-2 px-1">
             {checks.map((check) => (
                 <PasswordRequirement key={check.label} label={check.label} satisfied={check.satisfied} />
             ))}
@@ -381,7 +381,6 @@ const SignupForm = () => {
             };
 
             await setDoc(doc(db, "users", user.uid), userProfile);
-            // Removed addExampleData to start with clean data
 
         } catch (err) {
             const error = err as any;
@@ -391,7 +390,7 @@ const SignupForm = () => {
                         setError('이미 가입된 전화번호입니다.');
                         break;
                     case 'auth/invalid-email':
-                        setError('전화번호 형식이 올바르지 않습니다. (예: 01012345678)');
+                        setError('전화번호 형식이 올바르지 않습니다.');
                         break;
                     case 'auth/weak-password':
                         setError('비밀번호가 너무 약합니다. 6자 이상으로 설정해주세요.');
@@ -412,35 +411,42 @@ const SignupForm = () => {
     return (
         <>
             <form onSubmit={handleSignup} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 gap-3">
                      <InputField id="name" type="text" placeholder="성명" value={formData.name} onChange={handleChange} icon={<UserIcon className="w-5 h-5"/>} />
-                    <div className="flex items-center justify-around border-2 border-slate-200 rounded-lg bg-slate-50">
-                        <label className="flex items-center gap-2 cursor-pointer p-3">
-                            <input type="radio" name="gender" value="male" checked={formData.gender === 'male'} onChange={handleChange} className="form-radio text-indigo-500"/>
-                            <span className="text-sm text-slate-700">남성</span>
+                    <div className="flex items-center justify-around border border-slate-200 rounded-xl bg-slate-50 overflow-hidden">
+                        <label className="flex items-center gap-1.5 cursor-pointer p-3 w-full justify-center hover:bg-slate-100 transition-colors">
+                            <input type="radio" name="gender" value="male" checked={formData.gender === 'male'} onChange={handleChange} className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500"/>
+                            <span className="text-sm font-bold text-slate-700">남성</span>
                         </label>
-                        <label className="flex items-center gap-2 cursor-pointer p-3">
-                            <input type="radio" name="gender" value="female" checked={formData.gender === 'female'} onChange={handleChange} className="form-radio text-indigo-500"/>
-                             <span className="text-sm text-slate-700">여성</span>
+                        <div className="w-px h-6 bg-slate-200"></div>
+                        <label className="flex items-center gap-1.5 cursor-pointer p-3 w-full justify-center hover:bg-slate-100 transition-colors">
+                            <input type="radio" name="gender" value="female" checked={formData.gender === 'female'} onChange={handleChange} className="w-4 h-4 text-indigo-600 border-slate-300 focus:ring-indigo-500"/>
+                             <span className="text-sm font-bold text-slate-700">여성</span>
                         </label>
                     </div>
                 </div>
                 <InputField id="dateOfBirth" type="date" placeholder="생년월일" value={formData.dateOfBirth} onChange={handleChange} icon={<IdentificationIcon className="w-5 h-5"/>} />
-                <InputField id="school" type="text" placeholder="학교" value={formData.school} onChange={handleChange} icon={<AcademicCapIcon className="w-5 h-5"/>} />
-                <InputField id="major" type="text" placeholder="학과" value={formData.major} onChange={handleChange} icon={<AcademicCapIcon className="w-5 h-5"/>} />
+                <div className="grid grid-cols-2 gap-3">
+                    <InputField id="school" type="text" placeholder="학교" value={formData.school} onChange={handleChange} icon={<AcademicCapIcon className="w-5 h-5"/>} />
+                    <InputField id="major" type="text" placeholder="학과" value={formData.major} onChange={handleChange} icon={<AcademicCapIcon className="w-5 h-5"/>} />
+                </div>
                 <InputField id="phoneNumber" type="tel" placeholder="전화번호" value={formData.phoneNumber} onChange={handleChange} icon={<DevicePhoneMobileIcon className="w-5 h-5"/>} />
-                <InputField id="interestedJob" type="text" placeholder="관심 직무 (없으면 비워두세요)" value={formData.interestedJob} onChange={handleChange} icon={<BriefcaseIcon className="w-5 h-5"/>} required={false} />
-                 <InputField 
-                    id="password"
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="비밀번호"
-                    value={formData.password}
-                    onChange={handleChange}
-                    icon={<LockClosedIcon className="w-5 h-5" />}
-                    onToggleVisibility={() => setShowPassword(!showPassword)}
-                    showPassword={showPassword}
-                />
-                <PasswordStrengthMeter password={formData.password} />
+                <InputField id="interestedJob" type="text" placeholder="관심 직무 (선택)" value={formData.interestedJob} onChange={handleChange} icon={<BriefcaseIcon className="w-5 h-5"/>} required={false} />
+                
+                <div>
+                    <InputField 
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="비밀번호 (8자 이상)"
+                        value={formData.password}
+                        onChange={handleChange}
+                        icon={<LockClosedIcon className="w-5 h-5" />}
+                        onToggleVisibility={() => setShowPassword(!showPassword)}
+                        showPassword={showPassword}
+                    />
+                    <PasswordStrengthMeter password={formData.password} />
+                </div>
+
                 <InputField 
                     id="confirmPassword"
                     type={showConfirmPassword ? 'text' : 'password'}
@@ -451,22 +457,25 @@ const SignupForm = () => {
                     onToggleVisibility={() => setShowConfirmPassword(!showConfirmPassword)}
                     showPassword={showConfirmPassword}
                 />
-                <div className="flex items-center gap-2">
-                    <input type="checkbox" id="privacy" checked={privacyConsent} readOnly className="form-checkbox h-4 w-4 text-indigo-600 rounded" />
-                    <label htmlFor="privacy" className="text-sm text-slate-600">
+                
+                <div className="flex items-center gap-2 px-1 py-1">
+                    <input type="checkbox" id="privacy" checked={privacyConsent} readOnly className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500" />
+                    <label htmlFor="privacy" className="text-xs text-slate-600 font-medium">
                         <button 
                             type="button" 
                             onClick={() => setIsModalOpen(true)}
-                            className="underline hover:text-indigo-500 transition-colors"
+                            className="font-bold text-indigo-600 hover:text-indigo-800 underline transition-colors"
                         >
                             개인정보 제공 및 활용
                         </button>
                         에 동의합니다.
                     </label>
                 </div>
-                {error && <p className="text-sm text-red-500 text-center">{error}</p>}
-                 <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-3 px-4 bg-indigo-500 text-white rounded-lg font-semibold hover:bg-indigo-600 transition-colors disabled:bg-indigo-300">
-                    {isLoading ? <LoadingSpinner /> : '회원가입'}
+                
+                {error && <p className="text-xs text-red-500 text-center font-bold bg-red-50 py-2.5 rounded-xl border border-red-100">{error}</p>}
+                
+                 <button type="submit" disabled={isLoading} className="w-full flex items-center justify-center py-4 px-4 bg-indigo-600 text-white rounded-xl font-bold text-base hover:bg-indigo-700 transition-all shadow-lg hover:shadow-xl disabled:bg-indigo-300 disabled:shadow-none transform active:scale-[0.98]">
+                    {isLoading ? <LoadingSpinner /> : '회원가입 완료'}
                 </button>
             </form>
             <PrivacyPolicyModal 

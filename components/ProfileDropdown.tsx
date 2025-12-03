@@ -1,16 +1,19 @@
 
 import React from 'react';
 import { User } from '../types';
-import { Cog6ToothIcon, QuestionMarkCircleIcon, ArrowRightOnRectangleIcon, TrashIcon } from './icons';
+import { Cog6ToothIcon, QuestionMarkCircleIcon, ArrowRightOnRectangleIcon, TrashIcon, BellIcon, PencilSquareIcon } from './icons';
 
 interface ProfileDropdownProps {
     user: User;
     onClose: () => void;
     onLogout: () => void;
     onDeleteAccount: () => void;
+    onOpenAlarmSettings: () => void;
+    onOpenProfileSettings: () => void;
+    onOpenTrash: () => void; // New prop
 }
 
-const ProfileDropdown: React.FC<ProfileDropdownProps> = ({ user, onClose, onLogout, onDeleteAccount }) => {
+const ProfileDropdown: React.FC<ProfileDropdownProps> = ({ user, onClose, onLogout, onDeleteAccount, onOpenAlarmSettings, onOpenProfileSettings, onOpenTrash }) => {
     return (
         <div 
             className="absolute top-full right-0 mt-2 w-64 bg-white rounded-xl shadow-lg border border-slate-200 animate-fade-in-down origin-top-right z-50"
@@ -21,7 +24,30 @@ const ProfileDropdown: React.FC<ProfileDropdownProps> = ({ user, onClose, onLogo
                 <p className="text-xs text-slate-500 truncate">{user.email || '이메일 정보 없음'}</p>
             </div>
             <div className="p-2">
-                <MenuItem icon={<Cog6ToothIcon className="w-5 h-5 text-slate-500" />} label="설정" disabled />
+                <MenuItem 
+                    icon={<PencilSquareIcon className="w-5 h-5 text-indigo-500" />} 
+                    label="내 정보 수정 (이름/별명)" 
+                    onClick={() => {
+                        onOpenProfileSettings();
+                        onClose();
+                    }}
+                />
+                <MenuItem 
+                    icon={<BellIcon className="w-5 h-5 text-indigo-500" />} 
+                    label="대화 유도 알람 설정" 
+                    onClick={() => {
+                        onOpenAlarmSettings();
+                        onClose();
+                    }}
+                />
+                 <MenuItem 
+                    icon={<TrashIcon className="w-5 h-5 text-slate-500" />} 
+                    label="휴지통" 
+                    onClick={() => {
+                        onOpenTrash();
+                        onClose();
+                    }}
+                />
                 <MenuItem icon={<QuestionMarkCircleIcon className="w-5 h-5 text-slate-500" />} label="문의하기" disabled />
             </div>
             <div className="p-2 border-t border-slate-100 space-y-1">
